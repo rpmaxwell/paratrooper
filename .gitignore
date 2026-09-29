@@ -1,0 +1,10 @@
+# recordings, telemetry logs, frame dumps (hundreds of MB)
+captures/*
+
+# python
+__pycache__/
+*.pyc
+
+# local tool / OS files
+.claude/
+.DS_Store
