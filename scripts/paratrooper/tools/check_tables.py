@@ -36,7 +36,8 @@ def main(n=3000):
         cur = rnd.choice([None] + list(range(19)))
         tr = OT.Trooper(x, y, 100.0); tr.state = state
         a = time.perf_counter(); o = OT.plan_trooper(tr, part, cur, 100.0); b = time.perf_counter()
-        nw = P.plan_trooper(x, y, tr.vy, part, cur, free=(state == "free")); c = time.perf_counter()
+        # the old planner counted contact between ticks: compare on the swept table
+        nw = P.plan_trooper(x, y, tr.vy, part, cur, free=(state == "free"), swept=True); c = time.perf_counter()
         t_old += b - a; t_new += c - b
         o = None if o is None else (o[0], list(o[1]), o[2], o[3])
         if o != nw:

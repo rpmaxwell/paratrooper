@@ -9,6 +9,15 @@
 set -e
 cd "$(dirname "$0")"
 
+# VNC password: from the environment, or a git-ignored .env file (VNC_PASSWORD=...)
+if [ -z "${VNC_PASSWORD:-}" ] && [ -f .env ]; then
+    set -a; . ./.env; set +a
+fi
+if [ -z "${VNC_PASSWORD:-}" ]; then
+    echo "Set VNC_PASSWORD (export it, or put VNC_PASSWORD=... in .env)" >&2
+    exit 1
+fi
+
 INSTANCE_ID="${1:-}"
 if [ -n "$INSTANCE_ID" ]; then
     NAME="paratrooper-${INSTANCE_ID}"
@@ -27,6 +36,7 @@ docker rm -f "$NAME" >/dev/null 2>&1 || true
 mkdir -p "$CAPTURES_DIR"
 
 docker run -d --name "$NAME" \
+    -e VNC_PASSWORD \
     -p "${VNC_PORT}:5900" \
     -v ~/Documents/paratrooper/ParaTrooper.1982.com:/assets/ParaTrooper.1982.com:ro \
     -v "$(pwd)/docker/dosbox-x.conf:/config/dosbox-x.conf:ro" \

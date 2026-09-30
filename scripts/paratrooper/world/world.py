@@ -205,11 +205,13 @@ class World:
                     break
             if a is None:
                 a = Aircraft(next(_ids), kind, y0, x, 0, t, tk)
+                a.t_x = t
                 self.aircraft.append(a)
             elif x != a.x:
                 a.d = 1 if x > a.x else -1
                 if kind == "heli":
                     self.lane_dir[y0] = a.d
+                a.t_x = t  # first frame showing this position (see troopers)
             a.x, a.t = x, t
             seen.add(id(a))
         # a plane entering at an edge (not one leaving: no tracked full plane
@@ -389,6 +391,16 @@ class World:
             b.end = dict(kind="vanished", tick=tk, point=cp)
             self.stats["unexplained_ends"] += 1
         self.recent_ends = [e for e in self.recent_ends if e[0] >= tk - 40]
+        # a trooper whose every bullet has ended without killing it is a target
+        # again right away (not only after the planned meeting tick)
+        tgt = (b.ctx or {}).get("target")
+        if tgt is not None:
+            for tr in self.troopers:
+                if tr.id == tgt and tr.pending and b.id in tr.pending.get("shots", ()):
+                    tr.pending["shots"].discard(b.id)
+                    if not tr.pending["shots"] and tr.state in ("free", "canopy") and \
+                            not (b.end and b.end.get("entity") == tr.id):
+                        tr.pending = None
         rec = dict(type="bullet", shot=b.id, ctx=b.ctx, found=True, lane=b.lane,
                    lane_v=M.LANES[b.lane][1], v_measured=b.v_measured,
                    lane_ok=lane_ok,
@@ -400,13 +412,13 @@ class World:
         tick it was last seen -- bullets and targets on one tick numbering."""
         out = []
         for tr in self.troopers:
-            y = tr.y + tr.vy * (T - self.tick(tr.t))
+            y = tr.y + tr.vy * (T - self.tick(tr.t_y))
             if tr.state == "canopy":
                 out.append((tr.id, "canopy", M.trooper_box(tr.x, y, "canopy")))
             out.append((tr.id, "body", M.trooper_box(tr.x, y, "body")))
         for a in self.aircraft:
             if a.d:
-                x = a.x + M.HELI_VX * a.d * (T - self.tick(a.t))
+                x = a.x + M.HELI_VX * a.d * (T - self.tick(a.t_x))
                 box = M.heli_box(x, a.y0, a.d) if a.kind == "heli" else M.plane_box(x, 1, a.d)
                 out.append((a.id, a.kind, box))
         for b in self.bombs:
@@ -455,14 +467,20 @@ class World:
                     continue  # a trooper already standing here, not a new one
                 tr = Trooper(next(_ids), x, y, t, tk, y)
                 tr.y_since = tk
+                tr.t_y = t
+                tr.y_by_tick[tk] = y
                 self.troopers.append(tr)
             elif y != tr.y:
                 tr.hist.append((t, y))
                 tr.y, tr.t = y, t
                 tr.y_since = tk
+                # a position belongs to the frame that FIRST shows it: sprites
+                # are redrawn one by one after a tick, so later frames can still
+                # show the old position after the clock has moved on
+                tr.t_y = t
+                tr.y_by_tick[tk] = y
             else:
-                tr.t = t
-            tr.y_by_tick[tk] = y
+                tr.t = t  # still here (timeouts); t_y keeps the position's tick
             seen.add(id(tr))
         for bx, by in s.canopies:
             for tr in self.troopers:
@@ -483,7 +501,7 @@ class World:
                     if tr.pending:
                         tr.pending = None
             p = tr.pending
-            if p and t > p["t_meet"] + 3 * M.TICK_S and id(tr) in seen and tr.state in ("free", "canopy"):
+            if p and tk > p["tick_meet"] + 3 and id(tr) in seen and tr.state in ("free", "canopy"):
                 tr.pending = None  # missed (the ledger has the bullet's own record)
         for tr in list(self.troopers):
             # stopped moving (it falls 4-8 px every tick) -> it has landed, on

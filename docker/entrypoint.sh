@@ -25,7 +25,14 @@ if [ ! -f /work/game/PARATROO.COM ]; then
     cp /assets/ParaTrooper.1982.com /work/game/PARATROO.COM
 fi
 
-x11vnc -display "$DISPLAY" -forever -shared -passwd paratrooper -quiet -bg -o /tmp/x11vnc.log
+if [ -z "${VNC_PASSWORD:-}" ]; then
+    echo "VNC_PASSWORD is not set (run.sh passes it from your environment or .env)" >&2
+    exit 1
+fi
+# store it as an x11vnc password file so it never appears on a command line
+x11vnc -storepasswd "$VNC_PASSWORD" /tmp/vncpasswd >/dev/null 2>&1
+unset VNC_PASSWORD
+x11vnc -display "$DISPLAY" -forever -shared -rfbauth /tmp/vncpasswd -quiet -bg -o /tmp/x11vnc.log
 
 export HOME=/root
 mkdir -p /root

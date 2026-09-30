@@ -37,9 +37,19 @@ KINDS = ("heli", "plane")
 # bombs: release x -24..664 in steps of 8, spawn tick 0..33
 BR = np.arange(-24, 665, 8)
 MAX_J = 40
+# Troopers: the game registers a hit where the bullet is DRAWN each tick, not
+# along its path in between (2026-09-29, 192 logged shots: when the only
+# contact was between ticks, 39% of targets still landed vs 9% with a
+# drawn-position overlap -- fast bullets tunnel through a 16 px body). Bombs
+# and aircraft keep the swept check, which has been reliable for them.
+TROOPER_SUBSTEPS = (1.0,)
+# ...but between-tick-only contact still killed 61% of the time (46/75) vs 91%
+# (106/117) for drawn-position contact: the planners weight each by its rate.
+# (j == 0 -- the spawn tick itself -- is always a single drawn check.)
+P_DRAWN, P_SWEPT_ONLY = 0.91, 0.61
 
 
-def _trooper_table():
+def _trooper_table(substeps=None):
     """Vectorized over the (x, y) grid, per lane / part / speed -- same
     tick + swept-substep semantics as model.simulate."""
     T = np.full((M.N_LANES, 2, 2, len(TX), len(TY)), -1, np.int8)
@@ -52,7 +62,7 @@ def _trooper_table():
                     ux, uy = sx + vx * j, sy + vy * j
                     if uy < -2 or not -2 <= ux <= 640:
                         break
-                    for s in ((1.0,) if j == 0 else (0.25, 0.5, 0.75, 1.0)):
+                    for s in ((1.0,) if j == 0 else (substeps or TROOPER_SUBSTEPS)):
                         px, py = ux - vx * (1 - s), uy - vy * (1 - s)
                         yk = Y + tv * (j - 1 + s)  # body top at that instant
                         if part == "canopy":
@@ -65,7 +75,7 @@ def _trooper_table():
     return T
 
 
-def _trooper_bits_table():
+def _trooper_bits_table(substeps=None):
     """Like _trooper_table, but every bullet age j (0..39) at which the
     bullet touches the box, as a bitmask: the hit-probability planner needs
     hits restricted to a phase (before / after the chute opens), not just
@@ -81,7 +91,7 @@ def _trooper_bits_table():
                     if uy < -2 or not -2 <= ux <= 640:
                         break
                     hit_j = np.zeros(X.shape, bool)
-                    for s in ((1.0,) if j == 0 else (0.25, 0.5, 0.75, 1.0)):
+                    for s in ((1.0,) if j == 0 else (substeps or TROOPER_SUBSTEPS)):
                         px, py = ux - vx * (1 - s), uy - vy * (1 - s)
                         yk = Y + tv * (j - 1 + s)
                         if part == "canopy":
@@ -158,7 +168,9 @@ def tables():
 
 
 def build():
+    swept = (0.25, 0.5, 0.75, 1.0)
     t = {"trooper": _trooper_table(), "trooper_bits": _trooper_bits_table(),
+         "trooper_swept": _trooper_table(swept), "trooper_bits_swept": _trooper_bits_table(swept),
          "heli": _air_table("heli"), "plane": _air_table("plane"), "bomb": _bomb_table()}
     CACHE.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(CACHE, **t)

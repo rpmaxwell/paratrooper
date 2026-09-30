@@ -25,6 +25,7 @@ import time
 from ..physics import model as M
 from ..physics import plan as P
 from ..physics import prob_plan as PP
+from ..physics import tables as TB
 
 DEFAULT_PARK = {1: 14, -1: 4}   # 125.8 deg for bombs from the left, 55.8 from the right
 PLANE_MAX_PARK_DIST = 5
@@ -49,7 +50,8 @@ class Job:
         self.abort = abort          # () -> reason or None
         self.info = info or {}
         self.stage = "move"
-        self.tick0 = None           # game tick of the plan's tick 0 (for telemetry)
+        self.tick0 = None           # game tick of the plan's tick 0
+        self.shots = []             # shot ids fired by this job
         self.fired = []
         self.t_start = time.time()
 
@@ -115,7 +117,7 @@ class HeuristicPolicy:
         for tr in w.candidates():
             if tr.feasible_ever or tr.state != "canopy":
                 continue  # free-fallers: set when their probability plan clears P_MIN
-            if P.plan_trooper(tr.x, tr.y, tr.vy, "canopy", w.barrel, w.clamped):
+            if P.plan_trooper(tr.x, tr.y, tr.vy, "canopy", w.barrel, w.clamped, swept=True):
                 tr.feasible_ever = True
 
     def step(self, t):
@@ -215,6 +217,7 @@ class HeuristicPolicy:
                 ctx = dict(kind=j.kind, target=j.target.id, pos=j.pos, spawn=spawn, meet=j.meet,
                            plan_spawn_tick=(j.tick0 + spawn) if j.tick0 is not None else None, **j.info)
                 shot = self.turret.fire(ctx, j.pos)
+                j.shots.append(shot)
                 if j.kind == "trooper":
                     j.target.engagements.append(shot)
                 elif j.kind in ("heli", "plane"):
@@ -225,9 +228,11 @@ class HeuristicPolicy:
     def _finish(self, j):
         self.stats["fired"][j.kind] = self.stats["fired"].get(j.kind, 0) + len(j.fired)
         if j.fired and j.kind == "trooper":
-            j.target.pending = dict(t_meet=j.info["t_obs"] + j.meet * M.TICK_S)
+            # wait for these bullets' outcome: cleared early by the world when
+            # they all end without a kill, else resolved after the meeting tick
+            j.target.pending = dict(tick_meet=j.tick0 + j.meet, shots=set(j.shots))
         if j.fired and j.kind in ("heli", "plane"):
-            j.target.busy_until = j.info["t_obs"] + (j.meet + 2) * M.TICK_S
+            j.target.busy_until = self.w.clock.t0 + (j.tick0 + j.meet + 2 + 1) * M.TICK_S
         self.job = None
 
     def _may_fire(self, j, k):
@@ -324,7 +329,7 @@ class HeuristicPolicy:
     def _air_job(self, kind, a, pos, window, meet, t, abort, shots_if_wide):
         mid = len(window) // 2
         fire = [window[mid]] if (len(window) >= 3 and shots_if_wide == 1) else window[max(0, mid - 1):mid + 1]
-        tick0 = self.w.tick(a.t)
+        tick0 = self.w.tick(a.t_x)  # tick the observed x belongs to
 
         def tick_of():
             if a not in self.w.aircraft:
@@ -354,8 +359,14 @@ class HeuristicPolicy:
                 pos, fire, meet, clamp, p_hit = crush
                 part = "chute_only"
             elif tr.state == "canopy":
-                part, p_hit = "canopy", 1.0
+                # prefer a shot that overlaps at a drawn position (kills ~91%);
+                # else one whose only contact is between ticks (~61%)
+                part, p_hit = "canopy", TB.P_DRAWN
                 plan = P.plan_trooper(tr.x, tr.y, tr.vy, part, w.barrel, w.clamped, ground_y=w.ground_y(tr.x))
+                if not plan:
+                    plan = P.plan_trooper(tr.x, tr.y, tr.vy, part, w.barrel, w.clamped,
+                                          ground_y=w.ground_y(tr.x), swept=True)
+                    p_hit = TB.P_SWEPT_ONLY
                 if not plan:
                     continue
                 pos, window, meet, clamp = plan
@@ -384,7 +395,7 @@ class HeuristicPolicy:
             y_obs, state = tr.y, tr.state
             over = urgency(tr, w.landed)[1]
 
-            tick0 = self.w.tick(tr.t)
+            tick0 = self.w.tick(tr.t_y)  # tick the observed y belongs to
 
             def tick_of(tr=tr, tick0=tick0):
                 if tr not in self.w.troopers:

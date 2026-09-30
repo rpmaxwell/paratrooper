@@ -5,6 +5,9 @@ captures/*
 __pycache__/
 *.pyc
 
+# secrets (VNC password)
+.env
+
 # local tool / OS files
 .claude/
 .DS_Store

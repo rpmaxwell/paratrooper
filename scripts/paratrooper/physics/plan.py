@@ -15,6 +15,7 @@ from .tables import AX, AY, BR, TX, TY, tables
 
 _T = tables()
 _TROOPER, _HELI, _PLANE, _BOMB = _T["trooper"], _T["heli"], _T["plane"], _T["bomb"]
+_TROOPER_SWEPT = _T["trooper_swept"]
 
 
 def _earliest(moves, clamp=False):
@@ -87,7 +88,8 @@ def _first_run(ok, meets, fs, min_len=1):
 _F25 = np.arange(25)
 
 
-def plan_trooper(x, y, vy, part, cur_pos, clamped=False, free=False, chute_only=False, ground_y=None):
+def plan_trooper(x, y, vy, part, cur_pos, clamped=False, free=False, chute_only=False, ground_y=None,
+                 swept=False):
     """Trooper at body top (x, y) now, falling vy px/tick. Earliest meeting
     tick wins, ties to the wider window, then the shorter move. At the two
     rotation limits both lanes are options (stop on sight / clamp).
@@ -110,8 +112,9 @@ def plan_trooper(x, y, vy, part, cur_pos, clamped=False, free=False, chute_only=
         fs = earliest + _F25
         yi = (y + vy * fs - TY[0]) // 2
         valid = (yi >= 0) & (yi < len(TY))
+        tab = _TROOPER_SWEPT if swept else _TROOPER  # swept: also count contact between ticks
         j = np.full(fs.shape, -1, np.int16)
-        j[valid] = _TROOPER[lane, pi, vi, xi, yi[valid]]
+        j[valid] = tab[lane, pi, vi, xi, yi[valid]]
         meets = fs + j
         ok = (j >= 0) & (meets <= max_k)
         if chute_only:
@@ -119,7 +122,7 @@ def plan_trooper(x, y, vy, part, cur_pos, clamped=False, free=False, chute_only=
             # before it would touch the body (a body hit kills the trooper
             # outright -- no fall, no crush of the trooper below)
             jb = np.full(fs.shape, -1, np.int16)
-            jb[valid] = _TROOPER[lane, 1, vi, xi, yi[valid]]
+            jb[valid] = tab[lane, 1, vi, xi, yi[valid]]
             ok &= (jb < 0) | (jb > j)
         run = _first_run(ok, meets, fs)
         if run is None:

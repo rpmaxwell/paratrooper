@@ -12,7 +12,7 @@ from ..physics import model as M
 from ..physics import prob_plan as PP
 
 
-def brute(x, y_now, lane, f, k):
+def brute(x, y_now, lane, f, k, swept=False):
     t_land = k + (M.GROUND_BODY_Y - (y_now + M.FREE_VY * k)) / M.CANOPY_VY
 
     def y_at(t):
@@ -24,7 +24,7 @@ def brute(x, y_now, lane, f, k):
             if part == "canopy" and t < k:
                 return (-1000, -1000, -999, -999)  # no chute yet
             return M.trooper_box(x, y_at(t), part)
-        m = M.simulate(M.LANES[lane], box_at, f, max_k=t_land - 1)
+        m = M.simulate(M.LANES[lane], box_at, f, max_k=t_land - 1, swept=swept)
         if m is not None:
             hits.append(m)
     return min(hits) if hits else None
@@ -39,15 +39,17 @@ def main(n=3000):
         y = rnd.randrange(20, 115) * 2 + 1
         lane = rnd.randrange(M.N_LANES)
         f0 = rnd.randrange(3, 12)
-        p, hit, meet = PP.hit_matrix(x, y, 5, lane, f0)
+        p, q, meet = PP.hit_matrix(x, y, 5, lane, f0)
         k = rnd.randrange(1, 30)
         fi = rnd.randrange(PP.N_F)
-        b = brute(x, y, lane, f0 + fi, k)
-        ok = (b is not None) == bool(hit[k - 1, fi]) and (b is None or b == meet[k - 1, fi])
+        b = brute(x, y, lane, f0 + fi, k)                 # drawn-position contact
+        bs = brute(x, y, lane, f0 + fi, k, swept=True)    # any contact
+        want = PP.P_DRAWN if b is not None else (PP.P_SWEPT_ONLY if bs is not None else 0.0)
+        ok = abs(q[k - 1, fi] - want) < 1e-9 and (want == 0 or (b if b is not None else bs) == meet[k - 1, fi])
         agree += ok
         if not ok and len(mism) < 5:
-            mism.append((x, y, lane, f0 + fi, k, b, bool(hit[k - 1, fi]), int(meet[k - 1, fi])))
-    print(f"hit_matrix vs brute force: {agree}/{n} identical (hit and meeting tick)")
+            mism.append((x, y, lane, f0 + fi, k, b, bs, float(q[k - 1, fi]), int(meet[k - 1, fi])))
+    print(f"hit_matrix vs brute force: {agree}/{n} identical (contact type and meeting tick)")
     for m in mism:
         print("  mismatch (x, y, lane, spawn, open_k, brute_meet, table_hit, table_meet):", m)
 

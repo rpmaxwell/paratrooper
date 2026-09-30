@@ -103,11 +103,12 @@ def _overlap(box, px, py):
     return px + 1 >= x0 and px <= x1 and py + 1 >= y0 and py <= y1
 
 
-def simulate(lane, box_at, spawn_tick, max_k=10 ** 9):
+def simulate(lane, box_at, spawn_tick, max_k=10 ** 9, swept=True):
     """Tick at which a bullet on `lane` = (spawn, v), at its spawn point on
     `spawn_tick`, meets the target whose box at tick k is box_at(k) (None =
-    target gone). Checks each tick plus the swept path between ticks.
-    Identical semantics to the validated old simulators."""
+    target gone). Checks each tick plus (swept=True) the path between ticks
+    -- the old simulators' semantics; troopers are hit only at drawn
+    positions (swept=False), see tables.TROOPER_SUBSTEPS."""
     (sx, sy), (vx, vy) = lane
     for j in range(0, 40):
         k = spawn_tick + j
@@ -116,7 +117,7 @@ def simulate(lane, box_at, spawn_tick, max_k=10 ** 9):
         ux, uy = sx + vx * j, sy + vy * j
         if uy < -2 or not -2 <= ux <= 640:
             return None
-        for s in ((1.0,) if j == 0 else (0.25, 0.5, 0.75, 1.0)):
+        for s in ((1.0,) if j == 0 or not swept else (0.25, 0.5, 0.75, 1.0)):
             b = box_at(k - 1 + s)
             if b is None:
                 return None

@@ -21,9 +21,10 @@ import numpy as np
 
 from . import chute
 from . import model as M
-from .tables import TX, TY, tables
+from .tables import P_DRAWN, P_SWEPT_ONLY, TX, TY, tables
 
-_BITS = tables()["trooper_bits"]
+_BITS = tables()["trooper_bits"]              # drawn-position contact
+_BITS_SWEPT = tables()["trooper_bits_swept"]   # contact at drawn positions or between ticks
 _ONE = np.uint64(1)
 _ALL = np.uint64((1 << 40) - 1)
 N_F = 25          # spawn ticks considered from the earliest reachable one
@@ -37,12 +38,23 @@ def _earliest(moves, clamp=False):
             + M.FIRE_LATENCY_TICKS + (M.CLAMP_TICKS if clamp else 0))
 
 
-def _lookup(lane, part_i, vy_i, xi, y0):
+def _lookup(lane, part_i, vy_i, xi, y0, table=None):
+    table = _BITS if table is None else table
     yi = (y0 - TY[0]) // 2
     ok = (yi >= 0) & (yi < len(TY))
     out = np.zeros(y0.shape, np.uint64)
-    out[ok] = _BITS[lane, part_i, vy_i, xi, yi[ok]]
+    out[ok] = table[lane, part_i, vy_i, xi, yi[ok]]
     return out
+
+
+def _phase_bits(table, lane, xi, y_now, ks, fs, after_mask, land_mask):
+    """(pre, chute, body_after) contact bitmasks under one collision table."""
+    free = np.broadcast_to(_lookup(lane, 1, 1, xi, y_now + M.FREE_VY * fs, table), (HORIZON, N_F))
+    pre = free & _low_mask(ks - fs)
+    y0c = y_now + M.FREE_VY * ks + M.CANOPY_VY * (fs - ks)
+    chute = _lookup(lane, 0, 0, xi, y0c, table) & after_mask & land_mask
+    body_after = _lookup(lane, 1, 0, xi, y0c, table) & after_mask & land_mask
+    return pre, chute, body_after
 
 
 def _low_mask(n):
@@ -65,28 +77,26 @@ def hit_matrix(x, y_now, s_now, lane, f0, chute_only=False, ground_y=None):
     ks = np.arange(1, HORIZON + 1)[:, None]          # [K, 1]
     fs = f0 + np.arange(N_F)[None, :]                # [1, F]
     xi = (x - TX[0]) // 2
-    # before opening: body only, free fall from y_now
-    free = np.broadcast_to(_lookup(lane, 1, 1, xi, y_now + M.FREE_VY * fs), (HORIZON, N_F))
-    pre = free & _low_mask(ks - fs)                  # bullet ages j < k - f
-    # after opening: chute + body at 4 px/tick; body top at spawn-age 0 would be y0c
-    y0c = y_now + M.FREE_VY * ks + M.CANOPY_VY * (fs - ks)
-    after_mask = ~_low_mask(ks - fs)                 # ages j >= k - f
+    after_mask = ~_low_mask(ks - fs)                 # bullet ages j >= k - f (chute open)
     y_open = y_now + M.FREE_VY * ks
     t_land = ks + ((M.GROUND_BODY_Y if ground_y is None else ground_y) - y_open) / M.CANOPY_VY
     land_mask = _low_mask(np.floor(t_land - 1 - fs).astype(np.int64) + 1)  # meet before landing
-    chute_bits = _lookup(lane, 0, 0, xi, y0c) & after_mask & land_mask
-    body_after = _lookup(lane, 1, 0, xi, y0c) & after_mask & land_mask
+    pre, chute_bits, body_after = _phase_bits(_BITS, lane, xi, y_now, ks, fs, after_mask, land_mask)
     if chute_only:
-        # count only scenarios where the bullet enters the chute box before
-        # it would touch the body in either phase
+        # scenarios where the bullet enters the chute box (at a drawn position)
+        # before it would touch the body in either phase
         jc, jb = _lowest(chute_bits), _lowest(pre | body_after)
         hit = (chute_bits != 0) & (jc < jb)
-        return p, hit, fs + np.where(hit, jc, 0)
-    bits = pre | chute_bits | body_after
-    hit = bits != 0
-    lsb = bits & (~bits + _ONE)
-    j = np.where(hit, np.log2(np.where(hit, lsb, _ONE).astype(np.float64)), 0).astype(np.int64)
-    return p, hit, fs + j
+        return p, np.where(hit, P_DRAWN, 0.0), fs + np.where(hit, jc, 0)
+    drawn = pre | chute_bits | body_after
+    spre, schute, sbody = _phase_bits(_BITS_SWEPT, lane, xi, y_now, ks, fs, after_mask, land_mask)
+    swept = spre | schute | sbody
+    # per scenario: probability this bullet kills -- drawn-position contact is
+    # near-certain, between-tick-only contact is a coin flip weighted by data
+    q = np.where(drawn != 0, P_DRAWN, np.where(swept != 0, P_SWEPT_ONLY, 0.0))
+    bits = np.where(drawn != 0, drawn, swept)
+    j = _lowest(bits)
+    return p, q, fs + np.where(q > 0, j, 0)
 
 
 def plan_free(x, y_now, s_now, cur_pos, clamped=False, min_p=0.0, allow_pair=True, chute_only=False,
@@ -101,13 +111,14 @@ def plan_free(x, y_now, s_now, cur_pos, clamped=False, min_p=0.0, allow_pair=Tru
         moves = 0 if cur_pos is None else abs(pos - cur_pos)
         f0 = _earliest(moves, clamp)
         lane = pos if clamp else M.lane_id(pos, cur_pos, clamped)
-        p, hit, meet = hit_matrix(x, y_now, s_now, lane, f0, chute_only, ground_y)
-        single = p @ hit                                           # [F]
+        p, q, meet = hit_matrix(x, y_now, s_now, lane, f0, chute_only, ground_y)
+        hit = q > 0
+        single = p @ q                                             # [F]
         fi = int(np.argmax(single))
         cand = [(float(single[fi]), [fi])]
         if allow_pair and single[fi] < 0.9:
-            # union of two spawn ticks >= 1 apart
-            u = (p[:, None, None] * (hit[:, :, None] | hit[:, None, :])).sum(0)  # [F, F]
+            # two bullets: the scenario is covered unless both fail
+            u = (p[:, None, None] * (1 - (1 - q[:, :, None]) * (1 - q[:, None, :]))).sum(0)  # [F, F]
             np.fill_diagonal(u, 0)
             a, b = np.unravel_index(int(np.argmax(u)), u.shape)
             cand.append((float(u[a, b]), sorted([int(a), int(b)])))

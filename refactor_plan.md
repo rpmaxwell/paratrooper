@@ -226,3 +226,36 @@ Run: `docker exec paratrooper bash -c "cd /scripts && python3 -m paratrooper.run
   `tools/audit_misses.py` now judges free-fallers by P(hit) too -- in that
   game no landing was "unreachable"; all were out-of-position (4),
   engaged-and-missed (4) or busy (2).
+
+## Accuracy fixes and A/B (2026-09-29/30)
+
+- **Hits register at drawn positions.** The game checks a bullet against a
+  trooper where the bullet is drawn each tick, not along its path between
+  ticks: fast bullets tunnel through a 16 px free-falling body. In 192
+  logged trooper shots, when the only predicted contact was between ticks
+  39% of targets still landed vs 9% with a drawn-position overlap. Trooper
+  tables now come in both variants and the planners weight contact by its
+  measured kill rate: drawn 0.91, between-tick only 0.61
+  (`tables.P_DRAWN`, `P_SWEPT_ONLY`). Bombs/aircraft keep the swept rule.
+- **Positions are stamped with the tick they first appear.** Sprites are
+  redrawn one at a time after a tick, so a later frame can still show the
+  old position after the clock moved on; the tracker could date a position
+  a tick late, putting plans 8 px behind in free fall.
+- **Immediate retargeting:** a trooper whose bullets all end without a kill
+  is a target again at once (bullet ledger), not only after the planned
+  meeting tick.
+- **Stacks / targeting area:** a trooper that stops moving has landed (never
+  targeted); per-column landing height; per-column lowest reachable height
+  (`model.REACH_FLOOR`, y ~258 at the edges to ~311 beside the turret) --
+  troopers below it are dropped from the candidates, so unreachable ones no
+  longer crowd the 4 planning slots. The earlier hold-fire rule for
+  troopers over a landed one was removed (it made things worse).
+- Spray/debris: no measurable effect -- troopers undetected on 0.7% of
+  ticks, mostly without debris nearby; bullets that vanished had debris
+  ahead no more often than bullets that flew off-screen.
+- **Interleaved A/B, 8 games each** (committed 65f0cff vs this code): mean
+  787 -> 1277, median 1012 -> 1335, landings/min 2.06 -> 1.62, engaged-and-
+  missed landings 32/56 -> 19/67. The earlier 1424 six-game mean for
+  65f0cff was a lucky draw -- only side-by-side comparisons are reliable.
+- Remaining landings: out of position 55%, turret busy 15%, engaged and
+  missed 28% -- mostly placement / target choice, the RL work.
