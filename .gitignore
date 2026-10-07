@@ -11,3 +11,10 @@ __pycache__/
 # local tool / OS files
 .claude/
 .DS_Store
+
+# notebook environment (see notebooks/requirements.txt)
+.venv/
+.ipynb_checkpoints/
+
+# agent handoff notes
+.handoff/
