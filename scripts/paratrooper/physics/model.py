@@ -5,6 +5,8 @@ physics/tables.py is checked against. Every constant here was measured
 from recordings or live calibration; the docstrings of the old modules
 and plan_accuracy_and_priority.md hold the evidence.
 """
+import os
+
 TICK_S = 1 / 18.2065
 
 # ---- turret ---------------------------------------------------------------
@@ -67,14 +69,28 @@ def bomb_at(x_release, direction, k):
 # ---- aircraft -----------------------------------------------------------------
 HELI_VX = 8   # helicopters and planes: 8 px/tick, direction measured from motion
 
+# Helicopter hitbox variant, per process so two bots can A/B it:
+#   "model"  -- the sprite box below, swept bullet path (the validated default)
+#   "fitted" -- the same box +8 px in x for both directions, bullet tested at
+#               its drawn position only. Frame-level fit, 2026-10-06: 96.9% of
+#               ~28k bullet outcomes exact vs 94.0% (drawn) / 88.8% (swept)
+#               for "model"; see sim/collision.py (FITTED_BOX) and section 9
+#               of notebooks/sim_spawn_drop.ipynb.
+HELI_BOX = os.environ.get("PARATROOPER_HELI_BOX", "model")
+if HELI_BOX not in ("model", "fitted"):
+    raise ValueError(f"PARATROOPER_HELI_BOX={HELI_BOX!r}: expected 'model' or 'fitted'")
+HELI_BOX_DX = 8 if HELI_BOX == "fitted" else 0
+HELI_SWEPT = HELI_BOX == "model"
+
 
 def heli_box(x0, y0, d):
     """Helicopter from its 32x4 skids' top-left; the tail side depends on
     direction. 48 px wide: re-measured 2026-09-27 from full sprites (the old
-    heli_model box was 44 wide -- its measuring window clipped the tail)."""
+    heli_model box was 44 wide -- its measuring window clipped the tail).
+    Shifted by HELI_BOX_DX under the "fitted" variant."""
     if d < 0:
-        return x0, y0 - 16, x0 + 47, y0 + 3
-    return x0 - 16, y0 - 16, x0 + 31, y0 + 3
+        return x0 + HELI_BOX_DX, y0 - 16, x0 + 47 + HELI_BOX_DX, y0 + 3
+    return x0 - 16 + HELI_BOX_DX, y0 - 16, x0 + 31 + HELI_BOX_DX, y0 + 3
 
 
 def plane_box(x0, y0, d):
