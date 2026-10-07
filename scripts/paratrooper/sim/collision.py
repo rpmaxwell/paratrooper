@@ -199,3 +199,163 @@ def sprite_masks(files, n_files=12):
 
 def recorded_games(root):
     return sorted(glob.glob(f"{root}/captures/*/game_*.npz"))
+
+
+# ---- troopers ------------------------------------------------------------------------
+# native px relative to the body's top-left (perception: 4x6 body), (c0, c1, r0, r1)
+# = physics.model.trooper_box halved: body x..x+7, y-4..y+11 / canopy x-8..x+15, y-32..y-5
+MODEL_TROOPER_BOX = {"body": (0, 3, -2, 5), "canopy": (-4, 7, -16, -3)}
+# Finding (2026-10-07, 235 recorded games, ~9.9k labelled bullet outcomes near
+# troopers): NOT the helicopters' +8 px shift (that scores 82.0% vs 86.6%
+# unshifted), but bigger boxes -- fit_trooper_box: body as wide as the canopy
+# (game x-8..x+15, y-12..y+13), canopy down to the body top (y-32..y+1).
+# 91.7% exact (held-out half: 91.7% vs 86.4%); drawn-position contact kills
+# 93.7%, between-tick-only contact 11.6%. = physics.model.TROOPER_BOXES["fitted"].
+FITTED_TROOPER_BOX = {"body": (-4, 7, -6, 6), "canopy": (-4, 7, -16, 0)}
+TROOPER_VY = {"free": 4, "canopy": 2}   # native px per tick
+
+
+def _tick_offsets(H, T, i, n_ahead=8):
+    """frame -> ticks after frame i, from anything that moves on the tick grid:
+    helicopters (4 px/tick sideways), else canopy troopers (2 px/tick down),
+    else free-fallers (4 px/tick)."""
+    off = {}
+    for ff in range(i + 1, min(i + n_ahead + 1, len(H))):
+        m = None
+        for hx, hy in H[i]:
+            mm = [abs(x - hx) for x, y in H[ff] if y == hy and 0 < abs(x - hx) <= 40 and abs(x - hx) % 4 == 0]
+            if len(mm) == 1:
+                m = mm[0] // 4
+                break
+        if m is None:
+            for (tx, ty, st) in T[i]:
+                if st != "canopy":
+                    continue
+                mm = [y - ty for x, y, s in T[ff] if x == tx and s == "canopy" and 0 < y - ty <= 16 and (y - ty) % 2 == 0]
+                if len(mm) == 1:
+                    m = mm[0] // 2
+                    break
+        if m is None:
+            for (tx, ty, st) in T[i]:
+                mm = [y - ty for x, y, s in T[ff] if x == tx and s == "free" and 0 < y - ty <= 32 and (y - ty) % 4 == 0]
+                if len(mm) == 1:
+                    m = mm[0] // 4
+                    break
+        if m:
+            off.setdefault(m, []).append(ff)
+    return off
+
+
+def extract_troopers(files, progress=False):
+    """Like extract(), for bullet dots near airborne troopers. Rows carry
+    every trooper (x, y, 'free'|'canopy') and every helicopter whose
+    direction is known (bullets also die in helicopters)."""
+    from ..perception import sprites as S
+    rows = []
+    for fi, f in enumerate(files):
+        if progress:
+            print(f"{fi + 1}/{len(files)} {f}", flush=True)
+        F = np.load(f)["frames"]
+        det = [S.detect(fr) for fr in F]
+        H = [[(gx // 2, (gy - 1) // 2) for gx, gy in d.helis] for d in det]
+        D = [set((gx // 2, (gy - 1) // 2) for gx, gy in d.dots) for d in det]
+        T = []
+        for d in det:
+            can = {(gx // 2, (gy - 1) // 2) for gx, gy in d.canopies}
+            T.append([(gx // 2, (gy - 1) // 2, "canopy" if (gx // 2, (gy - 1) // 2) in can else "free")
+                      for gx, gy in d.bodies])
+        for i in range(len(F) - 9):
+            if not T[i]:
+                continue
+            off = _tick_offsets(H, T, i)
+            if 1 not in off:
+                continue
+            j = off[1][0]
+            helis = []
+            for hx, hy in H[i]:
+                mm = [x for x, y in H[j] if y == hy and abs(x - hx) == 4]
+                if len(mm) == 1:
+                    helis.append((hx, hy, 1 if mm[0] > hx else -1))
+            for b in D[i]:
+                if b in D[j] or not any(-20 <= tx - b[0] <= 20 and -12 <= ty - b[1] <= 45 for tx, ty, _ in T[i]):
+                    continue
+                ls = _lanes_of(b)
+                if len(ls) != 1:
+                    continue
+                vx, vy = NATIVE_LANES[ls[0]][1]
+                vis = []
+                for m in range(1, 6):
+                    p = (b[0] + m * vx, b[1] + m * vy)
+                    if not (0 <= p[0] < 320 and 0 <= p[1] < 200):
+                        vis.append(None)
+                    elif m not in off:
+                        vis.append("nf")
+                    else:
+                        vis.append(any(p in D[ff] for ff in off[m]))
+                rows.append(dict(f=f, i=i, b=b, v=(vx, vy), lane=ls[0], troopers=T[i], helis=helis, vis=vis))
+    return rows
+
+
+def predict_troopers(x, box=MODEL_TROOPER_BOX, dx=0, heli_box=FITTED_BOX, sweep=False):
+    """First tick (1..5) the bullet's drawn position (sweep: any point of its
+    path that tick) is inside a trooper part (shifted dx native px), or a
+    helicopter's box; troopers at their position after that tick's fall.
+    -> (tick, what) or ('none', None)."""
+    vx, vy = x["v"]
+    bx, by = x["b"]
+    for m in range(1, 6):
+        n = max(abs(vx), abs(vy)) if sweep else 1
+        for f in range(1, n + 1):
+            px = bx + (m - 1) * vx + round(vx * f / n)
+            py = by + (m - 1) * vy + round(vy * f / n)
+            for tx, ty, st in x["troopers"]:
+                y = ty + TROOPER_VY[st] * m
+                for part in (("canopy", "body") if st == "canopy" else ("body",)):
+                    c0, c1, r0, r1 = box[part]
+                    if c0 + dx <= px - tx <= c1 + dx and r0 <= py - y <= r1:
+                        return m, part
+            for hx, hy, d in x["helis"]:
+                c0, c1, r0, r1 = heli_box[d]
+                if c0 <= px - (hx + 4 * d * m) <= c1 and r0 <= py - hy <= r1:
+                    return m, "heli"
+    return "none", None
+
+
+def score_troopers(rows, **kw):
+    import collections
+    C = collections.Counter()
+    for x, o in rows:
+        p, what = predict_troopers(x, **kw)
+        C["exact" if p == o else ("missed absorption" if p == "none" else
+                                  ("false hit" if o == "none" else "wrong tick"))] += 1
+        if p != "none" and p != o and o == "none":
+            C[f"false hit: {what}"] += 1
+    return C
+
+
+def fit_trooper_box(rows, start=MODEL_TROOPER_BOX, rounds=3, deltas=(-2, -1, 0, 1, 2), sweep=False):
+    """Coordinate descent on the 8 edges (body + canopy) -> (box, exact share)."""
+    best = {k: list(v) for k, v in start.items()}
+
+    def acc(B):
+        C = score_troopers(rows, box={k: tuple(v) for k, v in B.items()}, sweep=sweep)
+        n = sum(v for k, v in C.items() if not k.startswith("false hit:"))
+        return C["exact"] / n
+    cur = acc(best)
+    for _ in range(rounds):
+        moved = False
+        for part in ("body", "canopy"):
+            for k in range(4):
+                cands = []
+                for dl in deltas:
+                    B = {p: list(v) for p, v in best.items()}
+                    B[part][k] += dl
+                    if B[part][0] <= B[part][1] and B[part][2] <= B[part][3]:
+                        cands.append((acc(B), -abs(dl), dl))
+                a, _, dl = max(cands)
+                if dl and a > cur:
+                    best[part][k] += dl
+                    cur, moved = a, True
+        if not moved:
+            break
+    return {k: tuple(v) for k, v in best.items()}, cur

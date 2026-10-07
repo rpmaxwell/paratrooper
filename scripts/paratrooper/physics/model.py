@@ -105,12 +105,32 @@ FREE_MAX_MEET_TICKS = 4     # free-fallers: point-blank only (canopy may open mi
 CANOPY_OPEN_FALL_PX = 172   # median free fall before the canopy opens
 
 
+# Trooper hitbox variant, per process (A/B, like HELI_BOX):
+#   "model"  -- two solid, adjacent boxes (per-shot audit, 2026-09-27):
+#               canopy = dome + the string area down to the head, body =
+#               head + body (8 px wide)
+#   "fitted" -- frame-level fit, 2026-10-07 (sim/collision.py, ~9.9k bullet
+#               outcomes near troopers, 235 recorded games): NOT shifted
+#               (+8 px like the helicopters made it worse, 82.0% vs 86.6%)
+#               but bigger -- the body is as wide as the canopy (24 px) and
+#               taller, the canopy reaches down to the body. 91.7% of
+#               outcomes exact vs 86.4% for "model" on held-out games.
+# Offsets (dx0, dy0, dx1, dy1) from the body's top-left (x, y), inclusive.
+TROOPER_BOXES = {
+    "model": {"canopy": (-8, -32, 15, -5), "body": (0, -4, 7, 11)},
+    "fitted": {"canopy": (-8, -32, 15, 1), "body": (-8, -12, 15, 13)},
+}
+TROOPER_BOX = os.environ.get("PARATROOPER_TROOPER_BOX", "model")
+if TROOPER_BOX not in TROOPER_BOXES:
+    raise ValueError(f"PARATROOPER_TROOPER_BOX={TROOPER_BOX!r}: expected 'model' or 'fitted'")
+TROOPER_BOX_OFFSETS = TROOPER_BOXES[TROOPER_BOX]
+
+
 def trooper_box(x, y, part):
-    """Two solid, adjacent hitboxes (per-shot audit, 2026-09-27): canopy =
-    dome + the whole string area down to the head; trooper = head + body."""
-    if part == "canopy":
-        return x - 8, y - 32, x + 15, y - 5
-    return x, y - 4, x + 7, y + 11
+    """Hitbox of a trooper part ("canopy" | "body"), body top-left (x, y),
+    under the TROOPER_BOX variant."""
+    dx0, dy0, dx1, dy1 = TROOPER_BOX_OFFSETS[part]
+    return x + dx0, y + dy0, x + dx1, y + dy1
 
 
 # ---- the simulator (ground truth for the tables) ------------------------------------
