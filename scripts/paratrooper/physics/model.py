@@ -116,20 +116,38 @@ CANOPY_OPEN_FALL_PX = 172   # median free fall before the canopy opens
 #               taller, the canopy reaches down to the body. 91.7% of
 #               outcomes exact vs 86.4% for "model" on held-out games.
 # Offsets (dx0, dy0, dx1, dy1) from the body's top-left (x, y), inclusive.
+#   "fitted_parts" -- the same overall extent as "fitted", with the canopy /
+#               body split taken from WHICH part died (sim/collision.py
+#               kill_part_events, 1,536 kills next to canopy troopers): canopy
+#               down to y-5 and body from y-4, as in "model", but both 24 px
+#               wide; a free-faller's body ("body_free", arms up) reaches up to
+#               y-12. Right part 94.9% vs 86.0% ("fitted") / 81.8% ("model");
+#               absorption outcomes as "fitted" (91.7%). The narrow "model" body
+#               is why crush shots kill the body: the planner thinks a bullet
+#               can pass beside the body up to the canopy.
 TROOPER_BOXES = {
     "model": {"canopy": (-8, -32, 15, -5), "body": (0, -4, 7, 11)},
     "fitted": {"canopy": (-8, -32, 15, 1), "body": (-8, -12, 15, 13)},
+    "fitted_parts": {"canopy": (-8, -32, 15, -5), "body": (-8, -4, 15, 13), "body_free": (-8, -12, 15, 13)},
 }
 TROOPER_BOX = os.environ.get("PARATROOPER_TROOPER_BOX", "model")
 if TROOPER_BOX not in TROOPER_BOXES:
-    raise ValueError(f"PARATROOPER_TROOPER_BOX={TROOPER_BOX!r}: expected 'model' or 'fitted'")
+    raise ValueError(f"PARATROOPER_TROOPER_BOX={TROOPER_BOX!r}: expected one of {sorted(TROOPER_BOXES)}")
 TROOPER_BOX_OFFSETS = TROOPER_BOXES[TROOPER_BOX]
 
 
-def trooper_box(x, y, part):
+def trooper_offsets(part, free=False):
+    """(dx0, dy0, dx1, dy1) of a part under the TROOPER_BOX variant; free=True
+    = the body of a trooper still in free fall (own box if the variant has one)."""
+    if part == "body" and free and "body_free" in TROOPER_BOX_OFFSETS:
+        return TROOPER_BOX_OFFSETS["body_free"]
+    return TROOPER_BOX_OFFSETS[part]
+
+
+def trooper_box(x, y, part, free=False):
     """Hitbox of a trooper part ("canopy" | "body"), body top-left (x, y),
     under the TROOPER_BOX variant."""
-    dx0, dy0, dx1, dy1 = TROOPER_BOX_OFFSETS[part]
+    dx0, dy0, dx1, dy1 = trooper_offsets(part, free)
     return x + dx0, y + dy0, x + dx1, y + dy1
 
 

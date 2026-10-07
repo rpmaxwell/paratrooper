@@ -56,7 +56,8 @@ TROOPER_SUBSTEPS = (1.0,)
 # makes contact nearly deterministic: drawn-position contact kills 93.7%
 # (n=2061), between-tick-only contact 11.6% (n=535) -- the old 61% was the
 # too-small box missing drawn-position hits.
-P_DRAWN, P_SWEPT_ONLY = {"model": (0.91, 0.61), "fitted": (0.94, 0.12)}[M.TROOPER_BOX]
+# "fitted_parts" has the same overall extent as "fitted", so the same rates.
+P_DRAWN, P_SWEPT_ONLY = {"model": (0.91, 0.61), "fitted": (0.94, 0.12), "fitted_parts": (0.94, 0.12)}[M.TROOPER_BOX]
 SWEPT = (0.25, 0.5, 0.75, 1.0)
 # Helicopters: swept under the "model" variant, drawn-only under "fitted"
 # (frame-level fit, see model.HELI_BOX); planes stay swept.
@@ -79,7 +80,7 @@ def _trooper_table(substeps=None):
                     for s in ((1.0,) if j == 0 else (substeps or TROOPER_SUBSTEPS)):
                         px, py = ux - vx * (1 - s), uy - vy * (1 - s)
                         yk = Y + tv * (j - 1 + s)  # body top at that instant
-                        dx0, dy0, dx1, dy1 = M.TROOPER_BOX_OFFSETS[part]
+                        dx0, dy0, dx1, dy1 = M.trooper_offsets(part, free=tv == M.FREE_VY)
                         x0, y0, x1, y1 = X + dx0, yk + dy0, X + dx1, yk + dy1
                         m = (px + 1 >= x0) & (px <= x1) & (py + 1 >= y0) & (py <= y1) & (hit < 0)
                         hit[m] = j
@@ -106,7 +107,7 @@ def _trooper_bits_table(substeps=None):
                     for s in ((1.0,) if j == 0 else (substeps or TROOPER_SUBSTEPS)):
                         px, py = ux - vx * (1 - s), uy - vy * (1 - s)
                         yk = Y + tv * (j - 1 + s)
-                        dx0, dy0, dx1, dy1 = M.TROOPER_BOX_OFFSETS[part]
+                        dx0, dy0, dx1, dy1 = M.trooper_offsets(part, free=tv == M.FREE_VY)
                         x0, y0, x1, y1 = X + dx0, yk + dy0, X + dx1, yk + dy1
                         hit_j |= (px + 1 >= x0) & (px <= x1) & (py + 1 >= y0) & (py <= y1)
                     bits[hit_j] |= np.uint64(1 << j)

@@ -212,6 +212,13 @@ MODEL_TROOPER_BOX = {"body": (0, 3, -2, 5), "canopy": (-4, 7, -16, -3)}
 # 91.7% exact (held-out half: 91.7% vs 86.4%); drawn-position contact kills
 # 93.7%, between-tick-only contact 11.6%. = physics.model.TROOPER_BOXES["fitted"].
 FITTED_TROOPER_BOX = {"body": (-4, 7, -6, 6), "canopy": (-4, 7, -16, 0)}
+# Which PART dies (kill_part_events, 2026-10-07, 1,536 kills next to canopy
+# troopers): the canopy/body split is where the model has it (canopy down to
+# game y-5, body from y-4) but both parts are the full 24 px wide, and a
+# free-faller's body box is taller (its sprite has the arms up). Same overall
+# extent as FITTED_TROOPER_BOX, right part 94.9% vs 86.0% (v1) / 81.8% (model).
+# = physics.model.TROOPER_BOXES["fitted_parts"].
+FITTED_PARTS_TROOPER_BOX = {"canopy": (-4, 7, -16, -3), "body": (-4, 7, -2, 6), "body_free": (-4, 7, -6, 6)}
 TROOPER_VY = {"free": 4, "canopy": 2}   # native px per tick
 
 
@@ -311,7 +318,8 @@ def predict_troopers(x, box=MODEL_TROOPER_BOX, dx=0, heli_box=FITTED_BOX, sweep=
             for tx, ty, st in x["troopers"]:
                 y = ty + TROOPER_VY[st] * m
                 for part in (("canopy", "body") if st == "canopy" else ("body",)):
-                    c0, c1, r0, r1 = box[part]
+                    # a box set may give free-fallers their own body box ("body_free")
+                    c0, c1, r0, r1 = box["body_free"] if part == "body" and st == "free" and "body_free" in box else box[part]
                     if c0 + dx <= px - tx <= c1 + dx and r0 <= py - y <= r1:
                         return m, part
             for hx, hy, d in x["helis"]:
@@ -359,3 +367,55 @@ def fit_trooper_box(rows, start=MODEL_TROOPER_BOX, rounds=3, deltas=(-2, -1, 0, 
         if not moved:
             break
     return {k: tuple(v) for k, v in best.items()}, cur
+
+
+# ---- which part a bullet kills (canopy vs body) ----------------------------------------
+def kill_part_events(rows, progress=False):
+    """For each absorbed bullet next to a CANOPY trooper, read the frames
+    after it: the canopy bursts and the trooper keeps falling in its own
+    column (canopy kill -- the crush shot), or the whole trooper bursts
+    (body kill), or the trooper sails on untouched (bullet died elsewhere).
+    -> list of dict(bullet arrival (r, c) relative to that trooper's body
+    top-left at the absorption tick, outcome, lane)."""
+    from ..perception import sprites as S
+    from ..geometry import CYAN
+    by_file = {}
+    for x in rows:
+        o = observed(x)
+        if o in (None, "none"):
+            continue
+        vx, vy = x["v"]
+        px, py = x["b"][0] + o * vx, x["b"][1] + o * vy
+        tx, ty, st = min(x["troopers"], key=lambda t: abs(t[0] - px) + abs(t[1] - py + 6))
+        if st != "canopy" or abs(px - tx) > 10 or not -22 <= py - (ty + 2 * o) <= 10:
+            continue
+        by_file.setdefault(x["f"], []).append((x, o, tx, ty, px, py))
+    out = []
+    for fi, (f, evs) in enumerate(by_file.items()):
+        if progress:
+            print(f"{fi + 1}/{len(by_file)}", flush=True)
+        F = np.load(f)["frames"]
+        for x, o, tx, ty, px, py in evs:
+            i = x["i"]
+            fr = list(range(i, min(i + 12, len(F))))
+            det = {k: S.detect(F[k]) for k in fr}
+            H = [[(gx // 2, (gy - 1) // 2) for gx, gy in det[k].helis] for k in fr]
+            T = [[(gx // 2, (gy - 1) // 2, "canopy" if (gx, gy) in set(det[k].canopies) else "free")
+                  for gx, gy in det[k].bodies] for k in fr]
+            off = _tick_offsets(H, T, 0, n_ahead=len(fr) - 1)
+            later = [fr[f_] for m, fs in off.items() if m >= o + 2 for f_ in fs]
+            if not later:
+                continue
+            y_now = ty + 2 * o                      # body top at the absorption tick
+            canopy_on = any(abs(gx // 2 - tx) <= 1 and (gy - 1) // 2 > y_now - 2
+                            for k in later for gx, gy in det[k].canopies)
+            # a trooper still falling in its own column, below where it was
+            falling = False
+            for k in later:
+                col = F[k][y_now: y_now + 60, max(0, tx - 1): tx + 5] == CYAN
+                if col.sum() >= 8:
+                    falling = True
+                    break
+            outcome = "survived" if canopy_on else ("canopy kill" if falling else "body kill")
+            out.append(dict(f=f, i=i, r=py - y_now, c=px - tx, outcome=outcome, lane=x["lane"], tick=o))
+    return out

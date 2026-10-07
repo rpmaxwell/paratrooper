@@ -29,7 +29,7 @@ def _plans(variant, cases):
     return json.loads(r.stdout)
 
 
-def main(n=2000):
+def main(n=2000, variant="fitted"):
     rnd = random.Random(1)
     cols = [32 + 24 * i for i in range(11)] + [368 + 24 * i for i in range(11)]
     cases = []
@@ -37,7 +37,8 @@ def main(n=2000):
         canopy = rnd.random() < 0.5
         y = (rnd.randrange(60, 330) if canopy else 57 + 8 * rnd.randrange(0, 22))
         cases.append((rnd.choice(cols), y | 1, canopy, rnd.randrange(19)))
-    old, new = _plans("model", cases), _plans("fitted", cases)
+    old, new = _plans("model", cases), _plans(variant, cases)
+    print(f"model vs {variant}")
     for canopy, name in ((False, "free-fallers (prob_plan.plan_free)"), (True, "canopy troopers (plan_trooper)")):
         idx = [i for i, c in enumerate(cases) if c[2] == canopy]
         has_o = sum(old[i] is not None for i in idx)
@@ -57,4 +58,4 @@ def main(n=2000):
 
 
 if __name__ == "__main__":
-    main(*map(int, sys.argv[1:]))
+    main(*(int(a) if a.isdigit() else a for a in sys.argv[1:]))
