@@ -14,6 +14,26 @@ import os
 import time
 
 COM_PATH = "/assets/ParaTrooper.1982.com"
+
+# Segment layout found so far (captures/mem1, round 1; correlation with the
+# vision stack's detections -- PROVISIONAL until checked against the code).
+# "col" = CGA byte column = game x // 8; "native" = 320x200 pixels.
+LAYOUT = {
+    "tick": (0x1BC0, "u16: game tick counter, +1 every tick"),
+    "score": (0x2C10, "5 bytes: score digits, least significant first"),
+    "hiscore": (0x1BAB, "4 bytes: hi-score digits, least significant first (HUD text at 0x1B9F)"),
+    "bullet_x": (0x2069, "6 x u16: bullet x, native px (0 = free slot)"),
+    "bullet_y": (0x20A5, "6 x u8, stride 2: bullet y, native px"),
+    "bullet_dir": (0x20E1, "6 x u8, stride 2: probably the bullet's lane / direction"),
+    "bomb_x": (0x203E, "u8 per slot (4 parallel 20-byte arrays from 0x2016): bomb x, col"),
+    "bomb_y": (0x2052, "u8 per slot: bomb y, native px"),
+    "trooper_y": (0x1D63, "22 drop columns, stride 6: trooper y = native body y - 16"),
+    "trooper_a": (0x1CC3, "22 drop columns, stride 6: u16, unknown (timer?)"),
+    "trooper_state": (0x1E03, "22 drop columns, stride 6: 2-valued state"),
+    "heli_lane17": (0x1BF8, "per column (index = game x // 8): nonzero byte where a helicopter is"),
+    "heli_lane41": (0x1C5A, "same for the y=41 lane; lanes 0x62 bytes apart"),
+    "debris": (0x24D4, "104-entry tables at 0x24D4 / 0x272C (CGA addresses) and 0x2984 (velocity)"),
+}
 SEG = 0x10000
 _SIG_OFF, _SIG_LEN = 0x100, 64     # a stretch of code past the entry point (not patched at startup)
 
