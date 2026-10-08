@@ -19,6 +19,7 @@ from .io.keys import Keys
 from .io.screen import Screen
 from .perception.barrel import barrel_pos
 from .perception.hud import is_done, read_score
+from .physics import model as M
 from .policy.heuristic import HeuristicPolicy
 from .telemetry.writer import Writer
 from .world.world import World
@@ -28,6 +29,10 @@ STALL_S = 30.0  # no screen change this long = frozen / paused (quiet sky betwee
 CSV_HEADER = ("finished_at,game,score,duration_s,bombs_seen,bombs_shot,bombs_landed,troopers_body,"
               "troopers_chute,troopers_landed,crushed,aircraft_down,shots,bullets_found,"
               "bullets_not_found,unexplained_fates,loop_p50_ms,loop_p99_ms\n")
+
+
+def _log(msg):
+    print(msg, flush=True)  # live log even when stdout is redirected to a file
 
 
 def wait_for_game(screen, keys, timeout=15):
@@ -41,7 +46,7 @@ def wait_for_game(screen, keys, timeout=15):
     return False
 
 
-def play_game(screen, keys, writer, out_dir, n, record=False, log=print):
+def play_game(screen, keys, writer, out_dir, n, record=False, log=_log):
     if not wait_for_game(screen, keys):
         raise RuntimeError("could not start a game")
     t0 = time.time()
@@ -51,7 +56,7 @@ def play_game(screen, keys, writer, out_dir, n, record=False, log=print):
     turret = Turret(keys, world)
     policy = HeuristicPolicy(world, turret, log=lambda m: log(f"[{time.time() - t0:7.2f}] {m}"))
     loop_ms, frames = [], []
-    emit(dict(type="game_start", t0=t0, game=n))
+    emit(dict(type="game_start", t0=t0, game=n, heli_box=M.HELI_BOX))
     last_change, stall_start, stalled_s = time.time(), None, 0.0
     while True:
         t, frame, changed = screen.grab()
@@ -94,7 +99,7 @@ def play_game(screen, keys, writer, out_dir, n, record=False, log=print):
     emit(summary)
     writer.close()
     writer.flush()
-    bombs_seen = st["bombs_shot"] + st["bombs_landed"]
+    bombs_seen = world.bombs_seen  # every tracked bomb, incl. kills the telemetry couldn't credit
     csv = f"{out_dir}/scores.csv"
     new = not os.path.exists(csv)
     with open(csv, "a") as fh:

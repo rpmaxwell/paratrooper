@@ -60,6 +60,45 @@ def plan_bomb(x_release, d, k_now, cur_pos, clamped=False):
     return None if best is None else (best[1], best[2])
 
 
+def _longest_run(usable):
+    """Longest run of consecutive ticks in a sorted list (first one on ties)."""
+    if not usable:
+        return []
+    runs, run = [], [usable[0]]
+    for f in usable[1:]:
+        if f == run[-1] + 1:
+            run.append(f)
+        else:
+            runs.append(run)
+            run = [f]
+    runs.append(run)
+    return max(runs, key=len)
+
+
+def plan_bomb_pair(xr1, xr2, d, gap, k_now, cur_pos, clamped=False):
+    """Two bombs of one plane released `gap` ticks apart (round-4 bombers drop
+    pairs; both keep the plane's x speed, so they fall in line). One barrel
+    position with a hitting run for each, so the second bomb is not left
+    until it is out of reach (plan_bomb for the first, then for the second,
+    reaches the second in ~1 of 5 pairs). Ticks in the FIRST bomb's frame
+    (bomb 2 is at k - gap). Widest pair of runs (each capped at 3), ties to
+    the shorter move. -> (pos, run1, run2) or None."""
+    best = None
+    for pos in range(M.N_POS):
+        moves = 0 if cur_pos is None else abs(pos - cur_pos)
+        earliest = max(0, k_now + _earliest(moves))
+        lane = M.lane_id(pos, cur_pos, clamped)
+        r1 = _longest_run([f for f in range(earliest, len(M.BOMB_YS)) if bomb_meet(xr1, d, lane, f) is not None])
+        r2 = _longest_run([f for f in range(max(earliest, gap), len(M.BOMB_YS) + gap)
+                           if bomb_meet(xr2, d, lane, f - gap) is not None])
+        if not r1 or not r2:
+            continue
+        key = (min(len(r1), 3) + min(len(r2), 3), -moves)
+        if best is None or key > best[0]:
+            best = (key, pos, r1, r2)
+    return None if best is None else best[1:]
+
+
 # ---- troopers -------------------------------------------------------------------
 def trooper_meet(x, y_spawn, vy, part, lane, f):
     """Meeting tick for a trooper whose body top is at y_spawn when the

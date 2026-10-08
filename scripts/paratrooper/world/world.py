@@ -106,6 +106,7 @@ class World:
         self.phase = 1
         self.last_heli_t = t0
         self.bombs, self.troopers, self.aircraft = [], [], []
+        self.bombs_seen = 0
         self.bullets, self.expected, self.orphans = [], [], []
         self.recent_ends = []          # ended bullets, for kill attribution
         self.landed = []
@@ -259,7 +260,10 @@ class World:
                     continue
                 b = Bomb(next(_ids), d, xr, k, k, t, tk)
                 self.bombs.append(b)
+                self.bombs_seen += 1
                 self.emit(dict(type="bomb_seen", tick=tk, id=b.id, dir=d, x_release=xr, k=k))
+            if b.plan is not None and t - b.t >= 2 * M.TICK_S:
+                b.plan = None  # reappeared after the burst stopped: plan it again
             b.k, b.t = k, t
         for b in list(self.bombs):
             if t - b.t > TRACK_KEEP_S or b.k_est(t) > len(M.BOMB_YS):
