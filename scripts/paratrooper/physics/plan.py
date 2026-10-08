@@ -35,7 +35,13 @@ def bomb_meet(x_release, d, lane, f):
 
 def plan_bomb(x_release, d, k_now, cur_pos, clamped=False):
     """Barrel position with the widest reachable run of hitting spawn ticks
-    (capped at 5), ties to the shorter move. -> (pos, run) or None."""
+    (capped at 5), ties to the shorter move. -> (pos, run) or None.
+    Under BOMB_BOX="code" (the game's own, much larger box) the EARLIEST
+    meeting tick wins instead -- a hit high up leaves time for the next
+    bomb -- with a run of at least 2 spawn ticks (timing slips a tick), and
+    the run is cut to its first 3 ticks."""
+    if M.BOMB_BOX == "code":
+        return _plan_bomb_early(x_release, d, k_now, cur_pos, clamped)
     best = None
     for pos in range(M.N_POS):
         moves = 0 if cur_pos is None else abs(pos - cur_pos)
@@ -58,6 +64,30 @@ def plan_bomb(x_release, d, k_now, cur_pos, clamped=False):
         if best is None or key > best[0]:
             best = (key, pos, run)
     return None if best is None else (best[1], best[2])
+
+
+def _plan_bomb_early(x_release, d, k_now, cur_pos, clamped=False, min_run=2, max_run=3):
+    best = None
+    for pos in range(M.N_POS):
+        moves = 0 if cur_pos is None else abs(pos - cur_pos)
+        earliest = max(0, k_now + _earliest(moves))
+        lane = M.lane_id(pos, cur_pos, clamped)
+        usable = [f for f in range(earliest, len(M.BOMB_YS)) if bomb_meet(x_release, d, lane, f) is not None]
+        # first run of consecutive hitting spawn ticks that is long enough
+        run = []
+        for f in usable:
+            run = run + [f] if run and f == run[-1] + 1 else [f]
+            if len(run) >= min_run:
+                break
+        if len(run) < min_run:
+            continue
+        while len(run) < max_run and run[-1] + 1 in usable:
+            run.append(run[-1] + 1)
+        meet = max(bomb_meet(x_release, d, lane, f) for f in run)
+        key = (meet, moves)
+        if best is None or key < best[0]:
+            best = (key, pos, run)
+    return None if best is None else best[1:]
 
 
 def _longest_run(usable):

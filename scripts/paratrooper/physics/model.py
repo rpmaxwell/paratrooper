@@ -60,6 +60,26 @@ BOMB_VX = 8
 BOMB_LANDED_K = 31
 
 
+# Bomb hitbox variant, per process (A/B, like HELI_BOX / TROOPER_BOX):
+#   "model" -- the 8x8 sprite, swept bullet path (tables._bomb_table)
+#   "code"  -- the game's own test, read from the disassembly (collision
+#              routine, CS:11D4; tools/disasm.py): checked once per tick at
+#              the bullet's drawn position, against the bomb where it was
+#              BEFORE its move that tick; hit when the bullet's CGA column
+#              (game x // 8) is within 1 of the bomb's and its native row is
+#              5 above .. 8 below the bomb's top row: ~24 x 28 game px.
+#              Explains 99.8% of 1.6k credited bomb kills (the 8x8 box: 22%).
+BOMB_BOX = os.environ.get("PARATROOPER_BOMB_BOX", "model")
+if BOMB_BOX not in ("model", "code"):
+    raise ValueError(f"PARATROOPER_BOMB_BOX={BOMB_BOX!r}: expected 'model' or 'code'")
+
+
+def bomb_hit_code(ux, uy, bx, by):
+    """The game's bullet-vs-bomb test. Bullet drawn at (ux, uy), bomb
+    top-left (bx, by), game coordinates."""
+    return abs((ux >> 3) - (bx >> 3)) <= 1 and -8 <= ((by - 1) >> 1) - ((uy - 1) >> 1) <= 5
+
+
 def bomb_at(x_release, direction, k):
     if not 0 <= k < len(BOMB_YS):
         return None

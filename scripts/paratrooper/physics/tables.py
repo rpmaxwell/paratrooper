@@ -28,7 +28,8 @@ from . import model as M
 
 # one cache per variant combination; the default stays tables.npz and the
 # helicopter-only variant tables_heli_fitted.npz, as before
-_VARIANT = "".join(f"_{kind}_{v}" for kind, v in (("heli", M.HELI_BOX), ("trooper", M.TROOPER_BOX)) if v != "model")
+_VARIANT = "".join(f"_{kind}_{v}" for kind, v in (("heli", M.HELI_BOX), ("trooper", M.TROOPER_BOX),
+                                                    ("bomb", M.BOMB_BOX)) if v != "model")
 CACHE = pathlib.Path(__file__).resolve().parents[1] / "data" / f"tables{_VARIANT}.npz"
 
 # trooper grid: x even 0..638, y (body top at spawn tick) odd -99..399
@@ -139,7 +140,34 @@ def _air_table(kind):
     return A
 
 
+def _bomb_table_code():
+    """BOMB_BOX="code": the game's test (model.bomb_hit_code) at drawn
+    positions, the bomb one tick behind the bullet (bullets move and are
+    tested before the bombs move)."""
+    B = np.full((M.N_LANES, 2, len(BR), len(M.BOMB_YS)), -1, np.int8)
+    for li, ((sx, sy), (vx, vy)) in enumerate(M.LANES):
+        for di, d in enumerate((-1, 1)):
+            for ri, xr in enumerate(BR):
+                for f in range(len(M.BOMB_YS)):
+                    for j in range(MAX_J):
+                        ux, uy = sx + vx * j, sy + vy * j
+                        if uy < -2 or not -2 <= ux <= 640:
+                            break
+                        k = f + j - 1
+                        if k < 0:
+                            continue
+                        if k >= len(M.BOMB_YS):
+                            break
+                        bx, by = M.bomb_at(xr, d, k)
+                        if M.bomb_hit_code(ux, uy, bx, by):
+                            B[li, di, ri, f] = j
+                            break
+    return B
+
+
 def _bomb_table():
+    if M.BOMB_BOX == "code":
+        return _bomb_table_code()
     B = np.full((M.N_LANES, 2, len(BR), len(M.BOMB_YS)), -1, np.int8)
     for li, lane in enumerate(M.LANES):
         for di, d in enumerate((-1, 1)):
