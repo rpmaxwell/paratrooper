@@ -14,6 +14,29 @@ from scipy import ndimage
 from ..geometry import CYAN, WHITE
 
 _EIGHT = np.ones((3, 3), bool)
+# a bomb: 4x4 native disc, corners missing (12 px)
+_DISC = np.array([[0, 1, 1, 0], [1, 1, 1, 1], [1, 1, 1, 1], [0, 1, 1, 0]], bool)
+
+
+def _stacked_bombs(blob):
+    """Two bombs in one column merge into a 4-wide blob 5..8 rows tall:
+    round-4 bombers drop pairs 2-4 ticks apart, and bombs keep the plane's
+    x speed, so a pair falls exactly in line. The bomb drawn last blanks its
+    whole 4x4 cell, so an overlapped one shows only its uncovered rows.
+    -> row offset of the lower disc if `blob` (bool, h x 4) is two stacked
+    discs (either drawn on top, or touching), else None."""
+    h = blob.shape[0]
+    if blob.shape[1] != 4 or not 5 <= h <= 8:
+        return None
+    dy = h - 4
+    upper_on_top = np.zeros((h, 4), bool)
+    upper_on_top[dy:] = _DISC
+    upper_on_top[:4] = _DISC
+    lower_on_top = np.zeros((h, 4), bool)
+    lower_on_top[:4] = _DISC
+    lower_on_top[dy:] = _DISC
+    union = upper_on_top | lower_on_top
+    return dy if any(np.array_equal(blob, m) for m in (upper_on_top, lower_on_top, union)) else None
 SKY_ROWS = 186          # native rows above the ground line
 TURRET_X0, TURRET_X1 = 140, 180  # native columns of the turret/barrel
 
@@ -70,6 +93,10 @@ def detect(frame):
             out.dots.append((gx, gy))
         elif (w, h, n) == (4, 4, 12) and y0 >= 8:
             out.bombs.append((gx, gy))
+        elif w == 4 and 5 <= h <= 8 and y0 >= 8:
+            dy = _stacked_bombs(frame[y0:y0 + h, x0:x0 + 4] == WHITE)
+            if dy is not None:
+                out.bombs += [(gx, gy), (gx, gy + 2 * dy)]
         # heads low on screen: landed troopers, incl. ones standing on a stack
         # (world.py keeps only heads that stay put, so falling ones don't count)
         elif (w, h, n) == (2, 2, 4) and y0 >= 150 and not TURRET_X0 <= x0 <= TURRET_X1:
