@@ -5,6 +5,11 @@ XVFB_WHD="${XVFB_WHD:-1024x768x24}"
 DISPLAY="${DISPLAY:-:99}"
 export DISPLAY
 
+# a container restarted after a crash keeps /tmp: drop the dead server's
+# lock, or Xvfb refuses to start ("Server is already active for display")
+DISPLAY_NUM="${DISPLAY#:}"
+rm -f "/tmp/.X${DISPLAY_NUM}-lock" "/tmp/.X11-unix/X${DISPLAY_NUM}"
+
 Xvfb "$DISPLAY" -screen 0 "$XVFB_WHD" -nolisten tcp &
 XVFB_PID=$!
 
