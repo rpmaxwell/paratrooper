@@ -97,6 +97,12 @@ class GameMemory:
         self.fh.seek(addr)
         return self.fh.read(n)
 
-    def read(self):
-        """The game's 64 KB segment, as bytes."""
-        return self._read_at(self.base)
+    def read(self, lo=0, hi=SEG):
+        """Bytes lo..hi of the game's segment (default: all 64 KB)."""
+        return self._read_at(self.base + lo, hi - lo)
+
+
+# the part of the segment holding all decoded game state (tick, seed, phase,
+# helicopter maps, troopers, bombs, bullets, barrel, score): what run.py
+# --mem records every frame
+STATE_LO, STATE_HI = 0x1B00, 0x2D00

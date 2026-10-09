@@ -1,12 +1,13 @@
 """Play games with the refactored stack and log verified telemetry.
 
-    python3 -m paratrooper.run [n_games] [out_dir] [--record]
+    python3 -m paratrooper.run [n_games] [out_dir] [--record] [--mem]
 
 Per distinct frame: grab (native) -> barrel read + turret step FIRST (so a
 goto stop is never delayed by other work) -> world update -> policy step.
 Per game, in out_dir: game_<t0>.jsonl (telemetry), a line in scores.csv,
 and with --record the game's distinct native frames (game_<t0>.npz) for
-offline audits.
+offline audits; with --mem the game's state bytes from its memory
+(io/memory.py, STATE_LO..STATE_HI) on every frame (game_<t0>_mem.npz).
 """
 import os
 import sys
@@ -16,6 +17,8 @@ import numpy as np
 
 from .control.turret import Turret
 from .io.keys import Keys
+from .io.memory import STATE_HI, STATE_LO, GameMemory
+from .perception.memstate import MemState
 from .io.screen import Screen
 from .perception.barrel import barrel_pos
 from .perception.hud import is_done, read_score
@@ -24,6 +27,9 @@ from .policy.heuristic import HeuristicPolicy
 from .telemetry.writer import Writer
 from .world.world import World
 
+# PARATROOPER_MEM_FEED=1: the world takes helicopters, troopers, bombs,
+# bullets, the barrel and the tick clock from the game's memory (implies --mem)
+MEM_FEED = os.environ.get("PARATROOPER_MEM_FEED") == "1"
 STALL_S = 30.0  # no screen change this long = frozen / paused (quiet sky between waves lasts a few s)
 
 CSV_HEADER = ("finished_at,game,score,duration_s,bombs_seen,bombs_shot,bombs_landed,troopers_body,"
@@ -46,7 +52,7 @@ def wait_for_game(screen, keys, timeout=15):
     return False
 
 
-def play_game(screen, keys, writer, out_dir, n, record=False, log=_log):
+def play_game(screen, keys, writer, out_dir, n, record=False, log=_log, mem=None):
     if not wait_for_game(screen, keys):
         raise RuntimeError("could not start a game")
     t0 = time.time()
@@ -56,7 +62,10 @@ def play_game(screen, keys, writer, out_dir, n, record=False, log=_log):
     turret = Turret(keys, world)
     policy = HeuristicPolicy(world, turret, log=lambda m: log(f"[{time.time() - t0:7.2f}] {m}"))
     loop_ms, frames = [], []
-    emit(dict(type="game_start", t0=t0, game=n, heli_box=M.HELI_BOX))
+    mem_t, mem_snaps = [], []     # --mem: the game's state bytes, read right after each grab
+    emit(dict(type="game_start", t0=t0, game=n, heli_box=M.HELI_BOX, trooper_box=M.TROOPER_BOX,
+              bomb_box=M.BOMB_BOX, phit=os.environ.get("PARATROOPER_PHIT", "model"),
+              bomb_pairs=os.environ.get("PARATROOPER_BOMB_PAIRS") == "1", mem_feed=MEM_FEED))
     last_change, stall_start, stalled_s = time.time(), None, 0.0
     while True:
         t, frame, changed = screen.grab()
@@ -75,10 +84,19 @@ def play_game(screen, keys, writer, out_dir, n, record=False, log=_log):
             log(f"[{t - t0:7.2f}] stall ended after {t - stall_start:.0f}s")
             stall_start = None
         last_change = t
+        ms = None
+        if mem is not None:
+            snap = np.frombuffer(mem.read(STATE_LO, STATE_HI), np.uint8)
+            if MEM_FEED:
+                # the game's state as of now: stamp the world update with the read time
+                t = time.time()
+                ms = MemState(snap, STATE_LO)
+            mem_t.append(t - t0)
+            mem_snaps.append(snap)
         a = time.perf_counter()
-        world.barrel = barrel_pos(frame)
+        world.barrel = ms.barrel()[0] if ms is not None else barrel_pos(frame)
         turret.step(t)
-        world.update(t, frame)
+        world.update(t, frame, mem=ms)
         if world.done:
             break
         policy.step(t)
@@ -110,6 +128,9 @@ def play_game(screen, keys, writer, out_dir, n, record=False, log=_log):
             st["bombs_landed"], st["trooper_body_killed"], st["trooper_chute_killed"], st["trooper_landed"],
             st["crushed"], st["aircraft_down"], st["shots"], st["bullets_found"], st["bullets_not_found"],
             st["unexplained_fates"], round(float(np.median(lp)), 2), round(float(np.percentile(lp, 99)), 2))) + "\n")
+    if mem_snaps:
+        np.savez_compressed(f"{out_dir}/game_{int(t0)}_mem.npz", t=np.array(mem_t), mem=np.stack(mem_snaps),
+                            lo=STATE_LO, base=mem.base)
     if record and frames:
         np.savez_compressed(f"{out_dir}/game_{int(t0)}.npz", t=np.array([f[0] for f in frames]),
                             frames=np.stack([f[1] for f in frames]))
@@ -125,8 +146,9 @@ def main(argv):
     record = "--record" in argv
     os.makedirs(out_dir, exist_ok=True)
     screen, keys, writer = Screen(), Keys(), Writer()
+    mem = GameMemory() if ("--mem" in argv or MEM_FEED) else None
     for n in range(n_games):
-        play_game(screen, keys, writer, out_dir, n, record=record)
+        play_game(screen, keys, writer, out_dir, n, record=record, mem=mem)
 
 
 if __name__ == "__main__":
