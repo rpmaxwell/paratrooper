@@ -13,8 +13,11 @@ it -- and how many ticks later?" is a pure function of (L, p):
 Values are j = ticks from spawn to meeting (-1 = miss); planners add the
 spawn tick and apply reachability / landing cutoffs. Built with
 physics.model.simulate (same semantics as the validated old simulators)
-and cached in data/tables.npz; `python3 -m paratrooper.physics.tables`
-rebuilds.
+and cached in data/tables.npz (data/tables_heli_fitted.npz under
+PARATROOPER_HELI_BOX=fitted, tables_trooper_fitted.npz under
+PARATROOPER_TROOPER_BOX=fitted, both: tables_heli_fitted_trooper_fitted.npz;
+see model.HELI_BOX / TROOPER_BOX);
+`python3 -m paratrooper.physics.tables` rebuilds the selected variant.
 """
 import math
 import pathlib
@@ -23,7 +26,11 @@ import numpy as np
 
 from . import model as M
 
-CACHE = pathlib.Path(__file__).resolve().parents[1] / "data" / "tables.npz"
+# one cache per variant combination; the default stays tables.npz and the
+# helicopter-only variant tables_heli_fitted.npz, as before
+_VARIANT = "".join(f"_{kind}_{v}" for kind, v in (("heli", M.HELI_BOX), ("trooper", M.TROOPER_BOX),
+                                                    ("bomb", M.BOMB_BOX)) if v != "model")
+CACHE = pathlib.Path(__file__).resolve().parents[1] / "data" / f"tables{_VARIANT}.npz"
 
 # trooper grid: x even 0..638, y (body top at spawn tick) odd -99..399
 TX = np.arange(0, 640, 2)
@@ -41,12 +48,21 @@ MAX_J = 40
 # along its path in between (2026-09-29, 192 logged shots: when the only
 # contact was between ticks, 39% of targets still landed vs 9% with a
 # drawn-position overlap -- fast bullets tunnel through a 16 px body). Bombs
-# and aircraft keep the swept check, which has been reliable for them.
+# and aircraft keep the swept check (helicopters: see AIR_SUBSTEPS).
 TROOPER_SUBSTEPS = (1.0,)
 # ...but between-tick-only contact still killed 61% of the time (46/75) vs 91%
 # (106/117) for drawn-position contact: the planners weight each by its rate.
 # (j == 0 -- the spawn tick itself -- is always a single drawn check.)
-P_DRAWN, P_SWEPT_ONLY = 0.91, 0.61
+# Under PARATROOPER_TROOPER_BOX=fitted (frame-level, 2026-10-07) the bigger box
+# makes contact nearly deterministic: drawn-position contact kills 93.7%
+# (n=2061), between-tick-only contact 11.6% (n=535) -- the old 61% was the
+# too-small box missing drawn-position hits.
+# "fitted_parts" has the same overall extent as "fitted", so the same rates.
+P_DRAWN, P_SWEPT_ONLY = {"model": (0.91, 0.61), "fitted": (0.94, 0.12), "fitted_parts": (0.94, 0.12)}[M.TROOPER_BOX]
+SWEPT = (0.25, 0.5, 0.75, 1.0)
+# Helicopters: swept under the "model" variant, drawn-only under "fitted"
+# (frame-level fit, see model.HELI_BOX); planes stay swept.
+AIR_SUBSTEPS = {"heli": SWEPT if M.HELI_SWEPT else (1.0,), "plane": SWEPT}
 
 
 def _trooper_table(substeps=None):
@@ -65,10 +81,8 @@ def _trooper_table(substeps=None):
                     for s in ((1.0,) if j == 0 else (substeps or TROOPER_SUBSTEPS)):
                         px, py = ux - vx * (1 - s), uy - vy * (1 - s)
                         yk = Y + tv * (j - 1 + s)  # body top at that instant
-                        if part == "canopy":
-                            x0, y0, x1, y1 = X - 8, yk - 32, X + 15, yk - 5
-                        else:
-                            x0, y0, x1, y1 = X, yk - 4, X + 7, yk + 11
+                        dx0, dy0, dx1, dy1 = M.trooper_offsets(part, free=tv == M.FREE_VY)
+                        x0, y0, x1, y1 = X + dx0, yk + dy0, X + dx1, yk + dy1
                         m = (px + 1 >= x0) & (px <= x1) & (py + 1 >= y0) & (py <= y1) & (hit < 0)
                         hit[m] = j
                 T[li, pi, vi] = hit
@@ -94,10 +108,8 @@ def _trooper_bits_table(substeps=None):
                     for s in ((1.0,) if j == 0 else (substeps or TROOPER_SUBSTEPS)):
                         px, py = ux - vx * (1 - s), uy - vy * (1 - s)
                         yk = Y + tv * (j - 1 + s)
-                        if part == "canopy":
-                            x0, y0, x1, y1 = X - 8, yk - 32, X + 15, yk - 5
-                        else:
-                            x0, y0, x1, y1 = X, yk - 4, X + 7, yk + 11
+                        dx0, dy0, dx1, dy1 = M.trooper_offsets(part, free=tv == M.FREE_VY)
+                        x0, y0, x1, y1 = X + dx0, yk + dy0, X + dx1, yk + dy1
                         hit_j |= (px + 1 >= x0) & (px <= x1) & (py + 1 >= y0) & (py <= y1)
                     bits[hit_j] |= np.uint64(1 << j)
                 T[li, pi, vi] = bits
@@ -117,22 +129,45 @@ def _air_table(kind):
                 alive &= (hx_int >= -48) & (hx_int <= 640)
                 if uy < -2 or not -2 <= ux <= 640:
                     break
-                for s in ((1.0,) if j == 0 else (0.25, 0.5, 0.75, 1.0)):
+                for s in ((1.0,) if j == 0 else AIR_SUBSTEPS[kind]):
                     px, py = ux - vx * (1 - s), uy - vy * (1 - s)
                     hx = X + M.HELI_VX * d * (j - 1 + s)
-                    if kind == "plane":
-                        x0, y0, x1, y1 = hx, 1, hx + 47, 20
-                    elif d < 0:
-                        x0, y0, x1, y1 = hx, Y - 16, hx + 47, Y + 3
-                    else:
-                        x0, y0, x1, y1 = hx - 16, Y - 16, hx + 31, Y + 3
+                    box = M.plane_box if kind == "plane" else M.heli_box
+                    x0, y0, x1, y1 = box(hx, Y, d)
                     m = alive & (px + 1 >= x0) & (px <= x1) & (py + 1 >= y0) & (py <= y1) & (hit < 0)
                     hit[m] = j
             A[li, di] = hit
     return A
 
 
+def _bomb_table_code():
+    """BOMB_BOX="code": the game's test (model.bomb_hit_code) at drawn
+    positions, the bomb one tick behind the bullet (bullets move and are
+    tested before the bombs move)."""
+    B = np.full((M.N_LANES, 2, len(BR), len(M.BOMB_YS)), -1, np.int8)
+    for li, ((sx, sy), (vx, vy)) in enumerate(M.LANES):
+        for di, d in enumerate((-1, 1)):
+            for ri, xr in enumerate(BR):
+                for f in range(len(M.BOMB_YS)):
+                    for j in range(MAX_J):
+                        ux, uy = sx + vx * j, sy + vy * j
+                        if uy < -2 or not -2 <= ux <= 640:
+                            break
+                        k = f + j - 1
+                        if k < 0:
+                            continue
+                        if k >= len(M.BOMB_YS):
+                            break
+                        bx, by = M.bomb_at(xr, d, k)
+                        if M.bomb_hit_code(ux, uy, bx, by):
+                            B[li, di, ri, f] = j
+                            break
+    return B
+
+
 def _bomb_table():
+    if M.BOMB_BOX == "code":
+        return _bomb_table_code()
     B = np.full((M.N_LANES, 2, len(BR), len(M.BOMB_YS)), -1, np.int8)
     for li, lane in enumerate(M.LANES):
         for di, d in enumerate((-1, 1)):
@@ -168,9 +203,8 @@ def tables():
 
 
 def build():
-    swept = (0.25, 0.5, 0.75, 1.0)
     t = {"trooper": _trooper_table(), "trooper_bits": _trooper_bits_table(),
-         "trooper_swept": _trooper_table(swept), "trooper_bits_swept": _trooper_bits_table(swept),
+         "trooper_swept": _trooper_table(SWEPT), "trooper_bits_swept": _trooper_bits_table(SWEPT),
          "heli": _air_table("heli"), "plane": _air_table("plane"), "bomb": _bomb_table()}
     CACHE.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(CACHE, **t)

@@ -16,6 +16,7 @@ from itertools import count
 
 from ..perception.barrel import barrel_pos
 from ..perception.hud import is_done, read_score
+from ..perception.memstate import sprites_from_memory
 from ..perception.sprites import detect
 from ..physics import model as M
 from .clock import GameClock
@@ -106,6 +107,7 @@ class World:
         self.phase = 1
         self.last_heli_t = t0
         self.bombs, self.troopers, self.aircraft = [], [], []
+        self.bombs_seen = 0
         self.bullets, self.expected, self.orphans = [], [], []
         self.recent_ends = []          # ended bullets, for kill attribution
         self.landed = []
@@ -119,6 +121,7 @@ class World:
         self.score = 0
         self.done = False
         self._prev_moving = None
+        self._mem_tick = None
         self.stats = dict(shots=0, bullets_found=0, bullets_not_found=0, bullets_unattributed=0,
                           hits=0, left_screen=0,
                           unexplained_ends=0, trooper_body_killed=0, trooper_chute_killed=0,
@@ -143,9 +146,20 @@ class World:
         return b.id
 
     # ----------------------------------------------------------------- update
-    def update(self, t, frame):
+    def update(self, t, frame, mem=None):
+        """mem: a perception.memstate.MemState read right after the grab
+        (PARATROOPER_MEM_FEED): helicopters, troopers, bombs, bullets and the
+        barrel come from the game's memory instead of detection, and the
+        clock's tick boundaries from the game's tick counter."""
         s = detect(frame)
-        self.barrel = barrel_pos(frame)
+        if mem is not None:
+            s = sprites_from_memory(mem, s)
+            self.barrel = mem.barrel()[0]
+            if self._mem_tick is not None and mem.tick != self._mem_tick:
+                self.clock.observe_move(t)          # a tick boundary passed since the last read
+            self._mem_tick = mem.tick
+        else:
+            self.barrel = barrel_pos(frame)
         self.done = is_done(frame)
         tk = self.tick(t)
         sc = read_score(frame)
@@ -153,7 +167,7 @@ class World:
             self.emit(dict(type="score", tick=tk, old=self.score, new=sc, delta=sc - self.score))
             self.score = sc
         moving = (tuple(s.helis), tuple(s.planes_full), tuple(s.bombs), tuple(s.dots))
-        if self._prev_moving is not None and moving != self._prev_moving:
+        if mem is None and self._prev_moving is not None and moving != self._prev_moving:
             self.clock.observe_move(t)
         self._prev_moving = moving
         self._phase(s, t, tk)
@@ -259,7 +273,10 @@ class World:
                     continue
                 b = Bomb(next(_ids), d, xr, k, k, t, tk)
                 self.bombs.append(b)
+                self.bombs_seen += 1
                 self.emit(dict(type="bomb_seen", tick=tk, id=b.id, dir=d, x_release=xr, k=k))
+            if b.plan is not None and t - b.t >= 2 * M.TICK_S:
+                b.plan = None  # reappeared after the burst stopped: plan it again
             b.k, b.t = k, t
         for b in list(self.bombs):
             if t - b.t > TRACK_KEEP_S or b.k_est(t) > len(M.BOMB_YS):

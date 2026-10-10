@@ -30,6 +30,11 @@ from ..physics import tables as TB
 DEFAULT_PARK = {1: 14, -1: 4}   # 125.8 deg for bombs from the left, 55.8 from the right
 PLANE_MAX_PARK_DIST = 5
 MAX_BOMB_IN_FLIGHT = 3
+# Round-4 bombers drop bombs in pairs 2-4 ticks apart; planning the first
+# alone leaves the second out of reach most of the time. "1": plan a pair
+# from one position (physics.plan.plan_bomb_pair).
+BOMB_PAIRS = os.environ.get("PARATROOPER_BOMB_PAIRS") == "1"
+MAX_PAIR_GAP = 6       # release ticks apart to count as a pair
 LATE_GAP_S = 30
 P_MIN = 0.5            # engage a free-faller when the best shot hits with at least this probability
 MAX_FREE_PLANS = 2     # probability plans per step (2 ms each): most urgent free-fallers only
@@ -163,10 +168,20 @@ class HeuristicPolicy:
         if self.parked_for == side and not self.turret.busy():
             return
         self.parked_for = side
-        self.turret.goto(pos, {"kind": "stop", "why": "park"})
+        if self.turret.goto(pos, {"kind": "stop", "why": "park"}) is None:
+            self.parked_for = None  # keys not settled: retry next frame
+
+    def _replan_bomb_if_unfired(self, j):
+        if j.kind == "bomb" and not j.fired and j.target in self.w.bombs:
+            j.target.plan = None
+        if j.kind == "bomb" and "pair" in j.info:
+            b2, _, fire2, _ = j.info["pair"]
+            if b2 in self.w.bombs and not any(f in fire2 for f in j.fired):
+                b2.plan = None
 
     def _abort(self, why):
         j = self.job
+        self._replan_bomb_if_unfired(j)
         self.stats["aborted"][j.kind] = self.stats["aborted"].get(j.kind, 0) + 1
         self.turret.stop(why)
         self.job = None
@@ -184,9 +199,12 @@ class HeuristicPolicy:
                 return
             # the stop press fires a bullet down the planned lane a few ticks
             # early -- it often makes the kill, so it is tagged with the target
-            if self.w.barrel != j.pos and not self.turret.goto(
-                    j.pos, {"kind": "stop", "why": j.kind, "target": j.target.id}):
-                if self.w.barrel is None:
+            started = None
+            if self.w.barrel != j.pos:
+                started = self.turret.goto(j.pos, {"kind": "stop", "why": j.kind, "target": j.target.id})
+                if started is None:
+                    return  # keys not settled yet: try again next frame
+                if not started and self.w.barrel is None:
                     return
             if self.turret.busy():
                 return
@@ -226,6 +244,7 @@ class HeuristicPolicy:
                     self._finish(j)
 
     def _finish(self, j):
+        self._replan_bomb_if_unfired(j)
         self.stats["fired"][j.kind] = self.stats["fired"].get(j.kind, 0) + len(j.fired)
         if j.fired and j.kind == "trooper":
             # wait for these bullets' outcome: cleared early by the world when
@@ -238,6 +257,8 @@ class HeuristicPolicy:
     def _may_fire(self, j, k):
         if j.kind != "bomb":
             return True
+        if "pair" in j.info:
+            return self._may_fire_pair(j, k)
         b = j.target
         meets = [P.bomb_meet(b.x_release, b.dir, M.lane_id(j.pos, j.pos, self.w.clamped), f) or f + 8
                  for f in j.fired]
@@ -248,7 +269,65 @@ class HeuristicPolicy:
         self.stats["jobs"][job.kind] = self.stats["jobs"].get(job.kind, 0) + 1
 
     # ------------------------------------------------------------------ bombs
+    def _bomb_partner(self, b):
+        """An unplanned bomb released just after b by the same plane -> (bomb, gap) or None."""
+        rel = self.w.tick(b.t) - b.k
+        best = None
+        for b2 in self.w.bombs:
+            if b2 is b or b2.plan is not None or b2.dir != b.dir:
+                continue
+            gap = (self.w.tick(b2.t) - b2.k) - rel
+            if 0 < gap <= MAX_PAIR_GAP and (best is None or gap < best[1]):
+                best = (b2, gap)
+        return best
+
+    def _bomb_done(self, j, b, fire):
+        """b is dead or gone: missing for 2 ticks after one of its bullets."""
+        return b not in self.w.bombs or (any(f in fire for f in j.fired) and (time.time() - b.t) / M.TICK_S >= 2)
+
+    def _may_fire_pair(self, j, k):
+        b, (b2, fire1, fire2, gap) = j.target, j.info["pair"]
+        spawn = k + M.FIRE_LATENCY_TICKS
+        mine = []
+        if spawn in fire1 and not self._bomb_done(j, b, fire1):
+            mine.append((b, fire1, 0))
+        if spawn in fire2 and not self._bomb_done(j, b2, fire2):
+            mine.append((b2, fire2, gap))
+        if not mine:
+            return False   # that bomb is already down: don't spray its run
+        lane = M.lane_id(j.pos, j.pos, self.w.clamped)
+        x, fire, g = mine[0]
+        meets = [P.bomb_meet(x.x_release, x.dir, lane, f - g) or f + 8 for f in j.fired if f in fire]
+        return sum(1 for m in meets if m >= k) < MAX_BOMB_IN_FLIGHT
+
+    def _start_bomb_pair(self, b, b2, gap):
+        plan = P.plan_bomb_pair(b.x_release, b2.x_release, b.dir, gap, b.k, self.w.barrel, self.w.clamped)
+        if plan is None:
+            return False
+        pos, run1, run2 = plan
+        fire1 = list(range(run1[0] - 1, run1[-1] + 1))
+        fire2 = list(range(run2[0] - 1, run2[-1] + 1))
+        b.plan, b2.plan = (pos, run1), (pos, [f - gap for f in run2])
+        tick0 = self.w.tick(b.t) - b.k
+        job = None
+
+        def tick_of():
+            if self._bomb_done(job, b, fire1) and self._bomb_done(job, b2, fire2):
+                return None
+            return self.w.tick(time.time()) - tick0
+
+        job = Job("bomb", b, pos, sorted(set(fire1) | set(fire2)), None, tick_of=tick_of,
+                  info=dict(x_release=b.x_release, pair=(b2, fire1, fire2, gap)))
+        job.tick0 = tick0
+        job.fired = b.fired  # shared: the first bomb's record logs the pair's shots (its frame)
+        self._new_job(job)
+        self.log(f"BOMB PAIR {b.id}+{b2.id} gap {gap} k={b.k}: pos {pos} spawn {run1} + {run2} (barrel {self.w.barrel})")
+        return True
+
     def _start_bomb(self, b, t):
+        partner = self._bomb_partner(b) if BOMB_PAIRS else None
+        if partner and self._start_bomb_pair(b, *partner):
+            return
         plan = P.plan_bomb(b.x_release, b.dir, b.k, self.w.barrel, self.w.clamped)
         if plan is None:
             b.plan = (None, [])
@@ -266,10 +345,12 @@ class HeuristicPolicy:
             # game clock, not an extrapolation: the press then lands early in
             # the tick, where press->spawn latency is a reliable 3 ticks
             k = self.w.tick(time.time()) - tick0
-            # stop once a bullet's meeting tick has passed and the bomb is gone
-            lane = M.lane_id(pos, pos, self.w.clamped)
-            meets = [P.bomb_meet(b.x_release, b.dir, lane, f) or f + 8 for f in b.fired]
-            if meets and min(meets) <= k and (time.time() - b.t) / M.TICK_S >= 1.5:
+            # stop as soon as the bomb has been missing for 2 ticks: an early
+            # bullet often kills it before the planned meeting tick, and
+            # waiting for that tick sent up to 9 more shots into the spray
+            # (45 of 88 bomb kills). Bombs aren't hidden in open sky; if one
+            # does reappear, the world clears its plan and it is re-planned.
+            if b.fired and (time.time() - b.t) / M.TICK_S >= 2:
                 return None
             return k
 
@@ -432,7 +513,8 @@ class HeuristicPolicy:
             pos = plan[0]
             if pos == w.barrel or self.pre_aimed == (tr.id, pos):
                 return False
+            if self.turret.goto(pos, {"kind": "stop", "why": "pre_aim"}) is None:
+                return True  # keys not settled: retry next frame
             self.pre_aimed = (tr.id, pos)
-            self.turret.goto(pos, {"kind": "stop", "why": "pre_aim"})
             return True
         return False

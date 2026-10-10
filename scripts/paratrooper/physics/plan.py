@@ -35,7 +35,13 @@ def bomb_meet(x_release, d, lane, f):
 
 def plan_bomb(x_release, d, k_now, cur_pos, clamped=False):
     """Barrel position with the widest reachable run of hitting spawn ticks
-    (capped at 5), ties to the shorter move. -> (pos, run) or None."""
+    (capped at 5), ties to the shorter move. -> (pos, run) or None.
+    Under BOMB_BOX="code" (the game's own, much larger box) the EARLIEST
+    meeting tick wins instead -- a hit high up leaves time for the next
+    bomb -- with a run of at least 2 spawn ticks (timing slips a tick), and
+    the run is cut to its first 3 ticks."""
+    if M.BOMB_BOX == "code":
+        return _plan_bomb_early(x_release, d, k_now, cur_pos, clamped)
     best = None
     for pos in range(M.N_POS):
         moves = 0 if cur_pos is None else abs(pos - cur_pos)
@@ -58,6 +64,69 @@ def plan_bomb(x_release, d, k_now, cur_pos, clamped=False):
         if best is None or key > best[0]:
             best = (key, pos, run)
     return None if best is None else (best[1], best[2])
+
+
+def _plan_bomb_early(x_release, d, k_now, cur_pos, clamped=False, min_run=2, max_run=3):
+    best = None
+    for pos in range(M.N_POS):
+        moves = 0 if cur_pos is None else abs(pos - cur_pos)
+        earliest = max(0, k_now + _earliest(moves))
+        lane = M.lane_id(pos, cur_pos, clamped)
+        usable = [f for f in range(earliest, len(M.BOMB_YS)) if bomb_meet(x_release, d, lane, f) is not None]
+        # first run of consecutive hitting spawn ticks that is long enough
+        run = []
+        for f in usable:
+            run = run + [f] if run and f == run[-1] + 1 else [f]
+            if len(run) >= min_run:
+                break
+        if len(run) < min_run:
+            continue
+        while len(run) < max_run and run[-1] + 1 in usable:
+            run.append(run[-1] + 1)
+        meet = max(bomb_meet(x_release, d, lane, f) for f in run)
+        key = (meet, moves)
+        if best is None or key < best[0]:
+            best = (key, pos, run)
+    return None if best is None else best[1:]
+
+
+def _longest_run(usable):
+    """Longest run of consecutive ticks in a sorted list (first one on ties)."""
+    if not usable:
+        return []
+    runs, run = [], [usable[0]]
+    for f in usable[1:]:
+        if f == run[-1] + 1:
+            run.append(f)
+        else:
+            runs.append(run)
+            run = [f]
+    runs.append(run)
+    return max(runs, key=len)
+
+
+def plan_bomb_pair(xr1, xr2, d, gap, k_now, cur_pos, clamped=False):
+    """Two bombs of one plane released `gap` ticks apart (round-4 bombers drop
+    pairs; both keep the plane's x speed, so they fall in line). One barrel
+    position with a hitting run for each, so the second bomb is not left
+    until it is out of reach (plan_bomb for the first, then for the second,
+    reaches the second in ~1 of 5 pairs). Ticks in the FIRST bomb's frame
+    (bomb 2 is at k - gap). Widest pair of runs (each capped at 3), ties to
+    the shorter move. -> (pos, run1, run2) or None."""
+    best = None
+    for pos in range(M.N_POS):
+        moves = 0 if cur_pos is None else abs(pos - cur_pos)
+        earliest = max(0, k_now + _earliest(moves))
+        lane = M.lane_id(pos, cur_pos, clamped)
+        r1 = _longest_run([f for f in range(earliest, len(M.BOMB_YS)) if bomb_meet(xr1, d, lane, f) is not None])
+        r2 = _longest_run([f for f in range(max(earliest, gap), len(M.BOMB_YS) + gap)
+                           if bomb_meet(xr2, d, lane, f - gap) is not None])
+        if not r1 or not r2:
+            continue
+        key = (min(len(r1), 3) + min(len(r2), 3), -moves)
+        if best is None or key > best[0]:
+            best = (key, pos, r1, r2)
+    return None if best is None else best[1:]
 
 
 # ---- troopers -------------------------------------------------------------------

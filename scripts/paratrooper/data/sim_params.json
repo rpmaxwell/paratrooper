@@ -1,0 +1,314 @@
+{
+ "meta": {
+  "fitted": "2026-10-06",
+  "games": 233,
+  "runs": [
+   "ab2_new",
+   "ab2_old",
+   "ab_new",
+   "ab_point",
+   "ab_prob",
+   "continuous2",
+   "continuous3",
+   "continuous4",
+   "crush1",
+   "crush2",
+   "crush3",
+   "drawn1",
+   "prob_smoke",
+   "reach1",
+   "refactor_lat",
+   "refactor_smoke",
+   "refactor_v1",
+   "refactor_v2",
+   "refactor_v3",
+   "refactor_v4",
+   "refactor_v5",
+   "rl_ready",
+   "stack1",
+   "tick_fix"
+  ],
+  "drops_matched": 8561,
+  "troopers_unmatched": 152,
+  "helis": 22704
+ },
+ "schedule": {
+  "heli_windows": [
+   [
+    0,
+    589
+   ],
+   [
+    1040,
+    2542
+   ],
+   [
+    3492,
+    4995
+   ],
+   [
+    5945,
+    7441
+   ]
+  ],
+  "plane_windows": [
+   [
+    690,
+    941
+   ],
+   [
+    2642,
+    3392
+   ],
+   [
+    5097,
+    5842
+   ]
+  ],
+  "period": 2452.5,
+  "heli_games_per_wave": [
+   221,
+   124,
+   66,
+   23
+  ],
+  "plane_games_per_wave": [
+   218,
+   120,
+   64
+  ]
+ },
+ "lanes": [
+  {
+   "pair": [
+    [
+     17,
+     -1
+    ],
+    [
+     41,
+     1
+    ]
+   ],
+   "lanes": [
+    17,
+    41
+   ],
+   "random_dirs": false,
+   "swapped_fraction": 0.0,
+   "games": 221,
+   "other_pairs": 0
+  },
+  {
+   "pair": [
+    [
+     17,
+     -1
+    ],
+    [
+     41,
+     1
+    ]
+   ],
+   "lanes": [
+    17,
+    41
+   ],
+   "random_dirs": true,
+   "swapped_fraction": 0.444,
+   "games": 124,
+   "other_pairs": 0
+  },
+  {
+   "pair": [
+    [
+     29,
+     -1
+    ],
+    [
+     65,
+     1
+    ]
+   ],
+   "lanes": [
+    29,
+    65
+   ],
+   "random_dirs": true,
+   "swapped_fraction": 0.485,
+   "games": 66,
+   "other_pairs": 0
+  },
+  {
+   "pair": [
+    [
+     41,
+     -1
+    ],
+    [
+     89,
+     1
+    ]
+   ],
+   "lanes": [
+    41,
+    89
+   ],
+   "random_dirs": true,
+   "swapped_fraction": 0.391,
+   "games": 23,
+   "other_pairs": 0
+  }
+ ],
+ "heli": {
+  "slots": 6,
+  "p_spawn": 0.007312,
+  "min_lane_gap": 7,
+  "vx": 8,
+  "entry_x": {
+   "-1": 608,
+   "1": 0
+  },
+  "drop_offset": {
+   "-1": 24,
+   "1": 8
+  },
+  "loglik_by_slots": {
+   "4": -68453.5,
+   "5": -65737.9,
+   "6": -65455.5,
+   "7": -65471.8,
+   "8": -65510.4,
+   "9": -65546.9,
+   "10": -65579.3
+  },
+  "by_alive": {
+   "0": {
+    "ticks": 107945,
+    "spawns": 4931,
+    "rate": 0.045680670711936634,
+    "per_free_slot": 0.007613445118656106
+   },
+   "1": {
+    "ticks": 163344,
+    "spawns": 6004,
+    "rate": 0.036756783230482905,
+    "per_free_slot": 0.007351356646096581
+   },
+   "2": {
+    "ticks": 112540,
+    "spawns": 3105,
+    "rate": 0.027590190154611692,
+    "per_free_slot": 0.006897547538652923
+   },
+   "3": {
+    "ticks": 41579,
+    "spawns": 863,
+    "rate": 0.020755669929531734,
+    "per_free_slot": 0.006918556643177244
+   },
+   "4": {
+    "ticks": 11365,
+    "spawns": 168,
+    "rate": 0.014782226132864056,
+    "per_free_slot": 0.007391113066432028
+   },
+   "5": {
+    "ticks": 1808,
+    "spawns": 18,
+    "rate": 0.00995575221238938,
+    "per_free_slot": 0.00995575221238938
+   },
+   "6": {
+    "ticks": 150,
+    "spawns": 1,
+    "rate": 0.006666666666666667,
+    "per_free_slot": null
+   }
+  },
+  "window_ticks": 438738,
+  "spawns": 15090,
+  "lane_rate": [
+   0.024097,
+   0.01597,
+   0.00788,
+   0.007332
+  ],
+  "lane_ticks": [
+   390758,
+   313088,
+   78431,
+   7365
+  ],
+  "lane_loglik": -73955.8,
+  "release_shot": 2,
+  "release_exit": 8,
+  "release_loglik": {
+   "0,0": -74025.9,
+   "1,0": -74001.5,
+   "2,0": -73981.0,
+   "2,2": -73975.7,
+   "2,4": -73963.7,
+   "2,6": -73966.6,
+   "2,8": -73955.8,
+   "2,10": -73961.6,
+   "2,12": -73966.4,
+   "2,14": -73972.5,
+   "2,16": -73984.4,
+   "2,18": -74001.7,
+   "2,20": -74016.8,
+   "2,22": -74028.3,
+   "2,24": -74036.9,
+   "3,0": -73984.0,
+   "4,0": -74017.2,
+   "5,0": -74059.9,
+   "6,0": -74089.2
+  },
+  "spawn_model": "per_lane"
+ },
+ "drop": {
+  "columns": [
+   32,
+   56,
+   80,
+   104,
+   128,
+   152,
+   176,
+   200,
+   224,
+   248,
+   272,
+   368,
+   392,
+   416,
+   440,
+   464,
+   488,
+   512,
+   536,
+   560,
+   584,
+   608
+  ],
+  "p_free": 0.03332,
+  "p_blocked": 0.00302,
+  "p_free_by_wave": [
+   0.03358,
+   0.03039,
+   0.02902,
+   0.02856
+  ],
+  "cluster_window": [
+   3,
+   50
+  ],
+  "cluster_cap": 8,
+  "cluster_beta": 0.1012,
+  "cluster_beta_se": 0.01,
+  "cluster_loglik_gain": 48.7,
+  "passes_free": 248897,
+  "passes_blocked": 5637,
+  "drops": 8310
+ }
+}
