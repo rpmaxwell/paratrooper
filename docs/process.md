@@ -131,6 +131,7 @@ logs `code`, a hash of the package source, to tell A/B arms apart.
 | variable | values (default first) | recommended |
 |---|---|---|
 | `PARATROOPER_MEM_FEED` | unset, 1 | A/B first |
+| `PARATROOPER_POLICY` | v1, v2 | A/B first; v2 = the measured fixes (earliest free-fall plan within 0.05 of the best p(hit), reach-floor deadline, one preempt per unfired trooper job). Temporary: the winner becomes the code |
 
 ## Known issues
 

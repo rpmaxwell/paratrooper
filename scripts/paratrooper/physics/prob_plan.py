@@ -170,12 +170,15 @@ def _option(x, y_now, s_now, pos, cur_pos, clamped, clamp, moves, f0, lane, chut
 
 
 def plan_free(x, y_now, s_now, cur_pos, clamped=False, min_p=0.0, allow_pair=True, chute_only=False,
-              ground_y=None):
+              ground_y=None, p_slack=0.0):
     """Best shot at a free-faller. Considers every barrel position (and the
     clamped limit lanes), every reachable spawn tick, and pairs of spawn
-    ticks on the same lane (one bullet for each likely phase).
+    ticks on the same lane (one bullet for each likely phase). Highest
+    p(hit) (less SHOT_PENALTY per extra bullet) wins, then the earliest last
+    meeting tick, then the shorter move; p_slack > 0 takes the earliest plan
+    among those within p_slack of the best (gun time is the constraint).
     -> dict(pos, clamp, spawns, p_hit, meet_last, p_single) or None."""
-    best = None
+    opts = []
     options = [(pos, False) for pos in range(M.N_POS)] + [(pos, True) for pos in M.SIGHT_LANE_ID]
     for pos, clamp in options:
         moves = 0 if cur_pos is None else abs(pos - cur_pos)
@@ -197,8 +200,10 @@ def plan_free(x, y_now, s_now, cur_pos, clamped=False, min_p=0.0, allow_pair=Tru
             fire = [f0 + i for i in idx]
             hitting = hit[:, idx].any(1) & (p > 0.02)
             meet_last = int(meet[:, idx].max(where=hit[:, idx], initial=fire[-1]).max()) if hitting.any() else fire[-1]
-            key = (round(p_hit - SHOT_PENALTY * (len(idx) - 1), 3), -meet_last, -moves)
-            if best is None or key > best[0]:
-                best = (key, dict(pos=pos, clamp=clamp, spawns=fire, p_hit=p_hit, meet_last=meet_last,
-                                  p_single=float(single[fi]), moves=moves))
-    return None if best is None else best[1]
+            opts.append((round(p_hit - SHOT_PENALTY * (len(idx) - 1), 3), meet_last, moves,
+                         dict(pos=pos, clamp=clamp, spawns=fire, p_hit=p_hit, meet_last=meet_last,
+                              p_single=float(single[fi]), moves=moves)))
+    if not opts:
+        return None
+    top = max(o[0] for o in opts)
+    return min((o for o in opts if o[0] >= top - p_slack - 1e-9), key=lambda o: (o[1], o[2]))[3]

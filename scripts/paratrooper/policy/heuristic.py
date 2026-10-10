@@ -26,6 +26,7 @@ off the target's own tick counter. Everything is non-blocking: step()
 does a little work per frame and returns.
 """
 import math
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -44,13 +45,31 @@ MAX_PAIR_GAP = 6       # release ticks apart to count as a pair
 LATE_GAP_S = 30
 P_MIN = 0.5            # engage a free-faller when the best shot hits with at least this probability
 MAX_FREE_PLANS = 2     # probability plans per step (2 ms each): most urgent free-fallers only
+# Temporary A/B switch (delete after the A/B; the winner becomes the code):
+#   "v1" -- the priority list above
+#   "v2" -- the measured fixes (docs/process.md, 10-09 diagnosis: gun time is
+#           the constraint): free-fall plans take the earliest meeting tick
+#           within P_SLACK of the best p(hit); troopers are ranked by the
+#           ticks until they drop below the reach floor (not the ground); a
+#           trooper job that has not fired yet yields to a trooper that would
+#           otherwise be lost (once per job).
+POLICY = os.environ.get("PARATROOPER_POLICY", "v1")
+if POLICY not in ("v1", "v2"):
+    raise ValueError(f"PARATROOPER_POLICY={POLICY!r}: expected 'v1' or 'v2'")
+P_SLACK = 0.05 if POLICY == "v2" else 0.0
 # plannable troopers enumerated per tick: under the tier score only the most
 # urgent one can win, and each further free-fall / crush plan costs ~3-4 ms
 MAX_TROOPER_CANDIDATES = 1
 
 
+def ticks_left(tr):
+    """Ticks until the trooper drops below its column's reach floor (no shot
+    exists after that) at its current speed."""
+    return (M.REACH_FLOOR.get(tr.x, M.GROUND_BODY_Y) - tr.y) / tr.vy
+
+
 def urgency(tr, landed):
-    ticks = (M.GROUND_BODY_Y - tr.y) / tr.vy
+    ticks = ticks_left(tr) if POLICY == "v2" else (M.GROUND_BODY_Y - tr.y) / tr.vy
     over = any(abs(lx - tr.x) <= 6 for lx, _ in landed)
     side = sum(1 for lx, _ in landed if (lx < 320) == (tr.x < 320))
     return ticks - 6 * side - (100 if over and tr.state == "canopy" else 0), over
@@ -71,7 +90,7 @@ class Candidate:
     meet: int | None = None
     clamp: bool = False
     p_hit: float = 1.0
-    deadline: float | None = None   # troopers: ticks until out of reach (urgency)
+    deadline: float | None = None   # troopers: ticks until below the reach floor
     gun_ticks: int = 0              # ticks the gun is held: up to the last bullet, or the move
     rank: float = 0.0               # order within the tier
 
@@ -97,7 +116,7 @@ class HeuristicPolicy:
         self.parked_for = None
         self.pre_aimed = None
         self.t_start = time.time()
-        self.stats = dict(jobs={}, aborted={}, fired={})
+        self.stats = dict(jobs={}, aborted={}, fired={}, preempts=0)
 
     # ----------------------------------------------------------------- driver
     def _free_plan(self, tr):
@@ -109,7 +128,8 @@ class HeuristicPolicy:
             drop_y = tr.first_y if tr.first_y <= 60 else 33
             s_now = max(0, (tr.y - drop_y) // M.FREE_VY)  # ticks since the drop (8 px/tick)
             cache = {k: v for k, v in cache.items() if k[0] != tr.id}
-            cache[key] = PP.plan_free(tr.x, tr.y, s_now, w.barrel, w.clamped, ground_y=w.ground_y(tr.x))
+            cache[key] = PP.plan_free(tr.x, tr.y, s_now, w.barrel, w.clamped, ground_y=w.ground_y(tr.x),
+                                      p_slack=P_SLACK)
             self._pp_cache = cache
         return cache[key]
 
@@ -138,7 +158,7 @@ class HeuristicPolicy:
             return pos, fire, meet, clamp, 1.0
         drop_y = tr.first_y if tr.first_y <= 60 else 33
         pp = PP.plan_free(tr.x, tr.y, max(0, (tr.y - drop_y) // M.FREE_VY), w.barrel, w.clamped,
-                          chute_only=True, ground_y=w.ground_y(tr.x))
+                          chute_only=True, ground_y=w.ground_y(tr.x), p_slack=P_SLACK)
         if not pp or pp["p_hit"] < P_MIN:
             return None
         return pp["pos"], pp["spawns"], pp["meet_last"], pp["clamp"], pp["p_hit"]
@@ -165,6 +185,8 @@ class HeuristicPolicy:
             if self.job:
                 self._abort("bomb")
             self._start_bomb(max(unplanned, key=lambda b: b.k), t)
+        if self.job and POLICY == "v2":
+            self._maybe_preempt(t)
         if self.job:
             self._run_job(t)
             return
@@ -196,6 +218,30 @@ class HeuristicPolicy:
         late = w.phase == "gap" and t - self.t_start > LATE_GAP_S
         return (self._trooper_candidates(t) + self._pre_aim_candidates() + self._heli_candidates(t)
                 + (self._park_candidates(1) if late else []))
+
+    def _maybe_preempt(self, t):
+        """v2: a trooper job that hasn't fired (still moving / clamping)
+        yields, once, to another trooper that would drop out of reach before
+        this job's last bullet plus the move to it -- if its own target
+        survives that detour. Checked once per game tick."""
+        j, w = self.job, self.w
+        if j.kind != "trooper" or j.fired or j.stage not in ("move", "clamp") or j.info.get("preempted"):
+            return
+        tk = w.tick(t)
+        if tk == getattr(self, "_preempt_tick", None):
+            return
+        self._preempt_tick = tk
+        rem = j.tick0 + j.fire_ticks[-1] - tk           # ticks until this job's last bullet
+        for c in self._trooper_candidates(t, exclude=j.target):
+            if c.deadline < rem + c.gun_ticks and ticks_left(j.target) > rem + c.gun_ticks:
+                self._abort("preempt")
+                self.stats["preempts"] += 1
+                c.start()
+                if self.job:
+                    self.job.info["preempted"] = j.target.id
+                self.log(f"PREEMPT trooper {j.target.id} -> {c.target.id} (deadline {c.deadline:.0f}, "
+                         f"rem {rem}, move {c.gun_ticks})")
+                return
 
     def _score(self, c):
         """Lower is better: today's priority list."""
@@ -485,9 +531,9 @@ class HeuristicPolicy:
         return job
 
     # --------------------------------------------------------------- troopers
-    def _trooper_candidates(self, t):
+    def _trooper_candidates(self, t, exclude=None):
         w = self.w
-        cands = w.candidates()
+        cands = [tr for tr in w.candidates() if tr is not exclude]
         if not cands:
             return []
         ranked = sorted(cands, key=lambda tr: urgency(tr, w.landed)[0])
@@ -528,7 +574,7 @@ class HeuristicPolicy:
             start = self._trooper_start(tr, t, part, p_hit, pos, fire, meet, clamp, over)
             # most urgent first (ties: rank order)
             out.append(Candidate("trooper", tr, pos, start=start, fire=fire, meet=meet, clamp=clamp, p_hit=p_hit,
-                                 deadline=u, gun_ticks=self._gun_ticks(pos, fire), rank=u))
+                                 deadline=ticks_left(tr), gun_ticks=self._gun_ticks(pos, fire), rank=u))
             if len(out) >= MAX_TROOPER_CANDIDATES:
                 break
         return out
