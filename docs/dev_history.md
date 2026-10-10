@@ -276,6 +276,24 @@ Results over 10 games (450 troopers, mean score 1,608):
 The binding constraint is **gun time**. That's the starting point for
 expected-value targeting.
 
+## 11. The refactor for EV targeting (10-09)
+
+Branch `rm/refactor`:
+- **One code path.** The disassembly had confirmed every box, so the
+  `model`/`fitted` variants, six A/B switches and six table caches went.
+  `tools/check_tables` now checks each table against brute-force
+  simulation under the game's boxes (all 3,000/3,000). The old reference,
+  the original scripts, implements the old boxes.
+- **Enumerate -> score -> pick.** The policy builds a `Candidate` per
+  option and starts the best by `_score`, the slot EV targeting fills. An
+  offline harness (old vs new policy on 2,000 random world states) showed
+  identical choices before any behaviour changed.
+- **The gun-time fixes, A/B tested** (13 games per arm, arms swapped
+  between containers): engagements got shorter (median 14 -> 12 gun ticks)
+  and kills/min rose 8.0 -> 8.6, and never-engaged landings fell 55% ->
+  50%. Score was 1,417 vs 1,499, within noise. Promoted as the baseline; the
+  preempt check doubled loop p99 (~9 ms), noted for the EV work.
+
 ---
 
 ## Lessons that kept coming back

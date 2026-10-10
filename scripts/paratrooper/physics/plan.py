@@ -33,40 +33,11 @@ def bomb_meet(x_release, d, lane, f):
     return None if j < 0 else f + int(j)
 
 
-def plan_bomb(x_release, d, k_now, cur_pos, clamped=False):
-    """Barrel position with the widest reachable run of hitting spawn ticks
-    (capped at 5), ties to the shorter move. -> (pos, run) or None.
-    Under BOMB_BOX="code" (the game's own, much larger box) the EARLIEST
-    meeting tick wins instead -- a hit high up leaves time for the next
-    bomb -- with a run of at least 2 spawn ticks (timing slips a tick), and
-    the run is cut to its first 3 ticks."""
-    if M.BOMB_BOX == "code":
-        return _plan_bomb_early(x_release, d, k_now, cur_pos, clamped)
-    best = None
-    for pos in range(M.N_POS):
-        moves = 0 if cur_pos is None else abs(pos - cur_pos)
-        earliest = k_now + _earliest(moves)
-        lane = M.lane_id(pos, cur_pos, clamped)
-        usable = [f for f in range(max(0, earliest), len(M.BOMB_YS))
-                  if bomb_meet(x_release, d, lane, f) is not None]
-        if not usable:
-            continue
-        runs, run = [], [usable[0]]
-        for f in usable[1:]:
-            if f == run[-1] + 1:
-                run.append(f)
-            else:
-                runs.append(run)
-                run = [f]
-        runs.append(run)
-        run = max(runs, key=len)
-        key = (min(len(run), 5), -moves)
-        if best is None or key > best[0]:
-            best = (key, pos, run)
-    return None if best is None else (best[1], best[2])
-
-
-def _plan_bomb_early(x_release, d, k_now, cur_pos, clamped=False, min_run=2, max_run=3):
+def plan_bomb(x_release, d, k_now, cur_pos, clamped=False, min_run=2, max_run=3):
+    """Barrel position with the EARLIEST meeting tick (the game's bomb box is
+    large, and a hit high up leaves time for the next bomb), with a run of
+    at least 2 hitting spawn ticks (timing slips a tick), cut to its first 3
+    ticks; ties to the shorter move. -> (pos, run) or None."""
     best = None
     for pos in range(M.N_POS):
         moves = 0 if cur_pos is None else abs(pos - cur_pos)
@@ -157,8 +128,7 @@ def _first_run(ok, meets, fs, min_len=1):
 _F25 = np.arange(25)
 
 
-def plan_trooper(x, y, vy, part, cur_pos, clamped=False, free=False, chute_only=False, ground_y=None,
-                 swept=False):
+def plan_trooper(x, y, vy, part, cur_pos, clamped=False, chute_only=False, ground_y=None, swept=False):
     """Trooper at body top (x, y) now, falling vy px/tick. Earliest meeting
     tick wins, ties to the wider window, then the shorter move. At the two
     rotation limits both lanes are options (stop on sight / clamp).
@@ -166,8 +136,6 @@ def plan_trooper(x, y, vy, part, cur_pos, clamped=False, free=False, chute_only=
     spawn ticks; same decisions as the scalar version (check_tables)."""
     # ground_y: body top when it lands in this column -- higher on a stack
     max_k = ((M.GROUND_BODY_Y if ground_y is None else ground_y) - y) / vy - 1
-    if part == "body" and free:
-        max_k = min(max_k, M.FREE_MAX_MEET_TICKS)
     xi = (x - TX[0]) // 2
     if not 0 <= xi < len(TX):
         return None

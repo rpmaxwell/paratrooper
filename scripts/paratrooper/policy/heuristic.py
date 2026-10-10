@@ -1,50 +1,91 @@
-"""Heuristic policy: today's behavior (scripts/bomb_defense.py) on the new
-world model, table planners and non-blocking turret. Baseline for RL and
-the parity target for the refactor.
+"""Heuristic policy on the world model, table planners and non-blocking
+turret: the baseline for expected-value targeting.
 
-Priorities, checked every frame:
-  1. bombs -- a reflex that preempts anything (widest reachable window,
-     <=3 bullets in flight, stop once a bullet's meeting tick has passed
-     and the bomb is gone)
+Priorities:
+  1. bombs -- a reflex that preempts anything: the earliest reachable
+     intercept (a pair of bombs from one plane planned together), <=3
+     bullets in flight, stop once the bomb is gone
   2. phase 2: planes, only from positions near the bomb park position and
      only with no bomb in the air; otherwise park for the entry side
-  3. troopers: most urgent first; canopy (bigger, slower, can crush a
-     landed trooper) else point-blank body; one bullet when the window
-     absorbs +-1 tick, else two; then leave it alone until its meeting tick
+  3. troopers: the fewest ticks until they drop below the reach floor first
+     (less 6 per landed trooper on that side, less 100 for a canopy over a
+     landed one); a chute-only shot over a landed trooper (crush), else a
+     canopy shot, else the free-faller's best p(hit) plan -- the earliest
+     one within P_SLACK of the best (gun time is the constraint). A job
+     that hasn't fired yet yields once to a trooper that would otherwise
+     be lost.
   4. pre-aim at a free-faller's predicted canopy point
   5. helicopters (yield to any new trooper / state change)
   6. late in phase 1 with nothing to do: park left for the planes
+
+Bombs are a reflex outside the choice. Everything else is a Candidate:
+each idle game tick the policy enumerates them (_candidates), scores them
+(_score) and starts the best -- the slot expected-value targeting fills.
+_score reproduces the list above: a tier per kind, then each kind's own
+order (trooper urgency, earliest aircraft meeting tick).
 
 A Job is one engagement: move -> (clamp) -> fire at planned ticks, timed
 off the target's own tick counter. Everything is non-blocking: step()
 does a little work per frame and returns.
 """
-import os
+import math
 import time
+from dataclasses import dataclass, field
+from typing import Callable
 
 from ..physics import model as M
 from ..physics import plan as P
 from ..physics import prob_plan as PP
-from ..physics import tables as TB
 
 DEFAULT_PARK = {1: 14, -1: 4}   # 125.8 deg for bombs from the left, 55.8 from the right
 PLANE_MAX_PARK_DIST = 5
 MAX_BOMB_IN_FLIGHT = 3
 # Round-4 bombers drop bombs in pairs 2-4 ticks apart; planning the first
-# alone leaves the second out of reach most of the time. "1": plan a pair
-# from one position (physics.plan.plan_bomb_pair).
-BOMB_PAIRS = os.environ.get("PARATROOPER_BOMB_PAIRS") == "1"
+# alone leaves the second out of reach most of the time, so a pair is
+# planned from one position (physics.plan.plan_bomb_pair).
 MAX_PAIR_GAP = 6       # release ticks apart to count as a pair
 LATE_GAP_S = 30
 P_MIN = 0.5            # engage a free-faller when the best shot hits with at least this probability
 MAX_FREE_PLANS = 2     # probability plans per step (2 ms each): most urgent free-fallers only
+# free-fall plans: the earliest last meeting tick among plans within this
+# much of the best p(hit) (A/B 2026-10-09: gun ticks per trooper job 14 -> 12)
+P_SLACK = 0.05
+# plannable troopers enumerated per tick: under the tier score only the most
+# urgent one can win, and each further free-fall / crush plan costs ~3-4 ms
+MAX_TROOPER_CANDIDATES = 1
+
+
+def ticks_left(tr):
+    """Ticks until the trooper drops below its column's reach floor (no shot
+    exists after that) at its current speed."""
+    return (M.REACH_FLOOR.get(tr.x, M.GROUND_BODY_Y) - tr.y) / tr.vy
 
 
 def urgency(tr, landed):
-    ticks = (M.GROUND_BODY_Y - tr.y) / tr.vy
+    ticks = ticks_left(tr)
     over = any(abs(lx - tr.x) <= 6 for lx, _ in landed)
     side = sum(1 for lx, _ in landed if (lx < 320) == (tr.x < 320))
     return ticks - 6 * side - (100 if over and tr.state == "canopy" else 0), over
+
+
+TIER = {"plane": 0, "trooper": 1, "pre_aim": 2, "heli": 3, "park": 4}
+
+
+@dataclass
+class Candidate:
+    """One thing the gun could do next. Plan ticks are relative to the
+    target's observation, as in Job."""
+    kind: str                  # "plane" | "trooper" | "pre_aim" | "heli" | "park"
+    target: object
+    pos: int
+    start: Callable[[], object]
+    fire: list = field(default_factory=list)
+    meet: int | None = None
+    clamp: bool = False
+    p_hit: float = 1.0
+    deadline: float | None = None   # troopers: ticks until below the reach floor
+    gun_ticks: int = 0              # ticks the gun is held: up to the last bullet, or the move
+    rank: float = 0.0               # order within the tier
 
 
 class Job:
@@ -68,7 +109,7 @@ class HeuristicPolicy:
         self.parked_for = None
         self.pre_aimed = None
         self.t_start = time.time()
-        self.stats = dict(jobs={}, aborted={}, fired={})
+        self.stats = dict(jobs={}, aborted={}, fired={}, preempts=0)
 
     # ----------------------------------------------------------------- driver
     def _free_plan(self, tr):
@@ -80,7 +121,8 @@ class HeuristicPolicy:
             drop_y = tr.first_y if tr.first_y <= 60 else 33
             s_now = max(0, (tr.y - drop_y) // M.FREE_VY)  # ticks since the drop (8 px/tick)
             cache = {k: v for k, v in cache.items() if k[0] != tr.id}
-            cache[key] = PP.plan_free(tr.x, tr.y, s_now, w.barrel, w.clamped, ground_y=w.ground_y(tr.x))
+            cache[key] = PP.plan_free(tr.x, tr.y, s_now, w.barrel, w.clamped, ground_y=w.ground_y(tr.x),
+                                      p_slack=P_SLACK)
             self._pp_cache = cache
         return cache[key]
 
@@ -109,7 +151,7 @@ class HeuristicPolicy:
             return pos, fire, meet, clamp, 1.0
         drop_y = tr.first_y if tr.first_y <= 60 else 33
         pp = PP.plan_free(tr.x, tr.y, max(0, (tr.y - drop_y) // M.FREE_VY), w.barrel, w.clamped,
-                          chute_only=True, ground_y=w.ground_y(tr.x))
+                          chute_only=True, ground_y=w.ground_y(tr.x), p_slack=P_SLACK)
         if not pp or pp["p_hit"] < P_MIN:
             return None
         return pp["pos"], pp["spawns"], pp["meet_last"], pp["clamp"], pp["p_hit"]
@@ -137,6 +179,8 @@ class HeuristicPolicy:
                 self._abort("bomb")
             self._start_bomb(max(unplanned, key=lambda b: b.k), t)
         if self.job:
+            self._maybe_preempt(t)
+        if self.job:
             self._run_job(t)
             return
         if self.turret.busy():
@@ -151,17 +195,71 @@ class HeuristicPolicy:
             if unplanned:
                 self._start_bomb(max(unplanned, key=lambda b: b.k), t)
             return
+        if w.phase != 2:
+            self.parked_for = None
+        cands = self._candidates(t)
+        if cands:
+            best = min(cands, key=self._score)
+            self._log_decision(best, cands)
+            best.start()
+
+    # -------------------------------------------------------------- choosing
+    def _candidates(self, t):
+        w = self.w
         if w.phase == 2:
-            if self._start_plane(t):
+            return self._plane_candidates(t) + self._park_candidates(w.entry_side)
+        late = w.phase == "gap" and t - self.t_start > LATE_GAP_S
+        return (self._trooper_candidates(t) + self._pre_aim_candidates() + self._heli_candidates(t)
+                + (self._park_candidates(1) if late else []))
+
+    def _maybe_preempt(self, t):
+        """A trooper job that hasn't fired (still moving / clamping)
+        yields, once, to another trooper that would drop out of reach before
+        this job's last bullet plus the move to it -- if its own target
+        survives that detour. Checked once per game tick."""
+        j, w = self.job, self.w
+        if j.kind != "trooper" or j.fired or j.stage not in ("move", "clamp") or j.info.get("preempted"):
+            return
+        tk = w.tick(t)
+        if tk == getattr(self, "_preempt_tick", None):
+            return
+        self._preempt_tick = tk
+        rem = j.tick0 + j.fire_ticks[-1] - tk           # ticks until this job's last bullet
+        for c in self._trooper_candidates(t, exclude=j.target):
+            if c.deadline < rem + c.gun_ticks and ticks_left(j.target) > rem + c.gun_ticks:
+                self._abort("preempt")
+                self.stats["preempts"] += 1
+                c.start()
+                if self.job:
+                    self.job.info["preempted"] = j.target.id
+                self.log(f"PREEMPT trooper {j.target.id} -> {c.target.id} (deadline {c.deadline:.0f}, "
+                         f"rem {rem}, move {c.gun_ticks})")
                 return
-            if w.entry_side is not None:
-                self._park(w.entry_side)
+
+    def _score(self, c):
+        """Lower is better: today's priority list."""
+        return TIER[c.kind], c.rank
+
+    def _log_decision(self, best, cands):
+        if best.kind == "park":
             return
-        self.parked_for = None
-        if self._start_trooper(t) or self._pre_aim(t) or self._start_heli(t):
-            return
-        if w.phase == "gap" and t - self.t_start > LATE_GAP_S:
-            self._park(1)
+        top = sorted(cands, key=self._score)[:3]
+        self.w.emit(dict(type="decision", tick=self.w.tick(time.time()), chosen=best.kind,
+                         target=getattr(best.target, "id", None), n=len(cands),
+                         top=[dict(kind=c.kind, target=getattr(c.target, "id", None), p_hit=round(c.p_hit, 3),
+                                   deadline=None if c.deadline is None else round(c.deadline, 1),
+                                   gun_ticks=c.gun_ticks) for c in top]))
+
+    def _gun_ticks(self, pos, fire=()):
+        if fire:
+            return max(fire)
+        return math.ceil(abs(pos - self.w.barrel) * M.TICKS_PER_POS) if self.w.barrel is not None else 0
+
+    def _park_candidates(self, side):
+        if side is None:
+            return []
+        pos = DEFAULT_PARK[side]
+        return [Candidate("park", None, pos, start=lambda: self._park(side), gun_ticks=self._gun_ticks(pos))]
 
     def _park(self, side):
         pos = DEFAULT_PARK[side]
@@ -325,7 +423,7 @@ class HeuristicPolicy:
         return True
 
     def _start_bomb(self, b, t):
-        partner = self._bomb_partner(b) if BOMB_PAIRS else None
+        partner = self._bomb_partner(b)
         if partner and self._start_bomb_pair(b, *partner):
             return
         plan = P.plan_bomb(b.x_release, b.dir, b.k, self.w.barrel, self.w.clamped)
@@ -361,41 +459,36 @@ class HeuristicPolicy:
         self.log(f"BOMB {b.id} k={b.k} x_release={b.x_release}: pos {pos} spawn {run} (barrel {self.w.barrel})")
 
     # ----------------------------------------------------------------- planes
-    def _start_plane(self, t):
+    def _plane_candidates(self, t):
         w = self.w
         if w.bombs or w.entry_side is None:
-            return False
+            return []
         park = DEFAULT_PARK[w.entry_side]
         allowed = range(max(0, park - PLANE_MAX_PARK_DIST), min(M.N_POS - 1, park + PLANE_MAX_PARK_DIST) + 1)
-        best = None
+        out = []
         for a in w.aircraft:
             if a.kind != "plane" or not a.d or a.busy_until > t:
                 continue
             plan = P.plan_air("plane", a.x, 1, a.d, w.barrel, w.clamped, allowed=allowed)
-            if plan and (best is None or plan[2] < best[1][2]):
-                best = (a, plan)
-        if best is None:
-            return False
-        a, (pos, window, meet) = best
-        self.parked_for = None
-        self._new_job(self._air_job("plane", a, pos, window, meet, t,
-                                    abort=lambda: "bomb" if self.w.bombs else None, shots_if_wide=1))
-        return True
+            if plan:
+                out.append(self._air_candidate("plane", a, plan, t, abort=lambda: "bomb" if self.w.bombs else None,
+                                               shots_if_wide=1))
+        return out
 
     # ------------------------------------------------------------ helicopters
-    def _start_heli(self, t):
+    def _heli_candidates(self, t):
         w = self.w
-        best = None
+        out = []
         for a in w.aircraft:
             if a.kind != "heli" or not a.d or a.busy_until > t:
                 continue
             plan = P.plan_air("heli", a.x, a.y0, a.d, w.barrel, w.clamped)
-            if plan and (best is None or plan[2] < best[1][2]):
-                best = (a, plan)
-        if best is None:
-            return False
-        a, (pos, window, meet) = best
-        known = {(tr.id, tr.state) for tr in w.candidates()}
+            if plan:
+                out.append(self._air_candidate("heli", a, plan, t, abort=self._heli_abort(), shots_if_wide=2))
+        return out
+
+    def _heli_abort(self):
+        known = {(tr.id, tr.state) for tr in self.w.candidates()}
 
         def abort():
             if self.w.bombs or self.w.phase == 2:
@@ -403,13 +496,22 @@ class HeuristicPolicy:
             if {(tr.id, tr.state) for tr in self.w.candidates()} - known:
                 return "new_trooper"
             return None
+        return abort
 
-        self._new_job(self._air_job("heli", a, pos, window, meet, t, abort=abort, shots_if_wide=2))
-        return True
-
-    def _air_job(self, kind, a, pos, window, meet, t, abort, shots_if_wide):
+    def _air_candidate(self, kind, a, plan, t, abort, shots_if_wide):
+        pos, window, meet = plan
         mid = len(window) // 2
         fire = [window[mid]] if (len(window) >= 3 and shots_if_wide == 1) else window[max(0, mid - 1):mid + 1]
+
+        def start():
+            if kind == "plane":
+                self.parked_for = None
+            self._new_job(self._air_job(kind, a, pos, fire, meet, t, abort))
+        # earliest meeting tick first (ties: the first aircraft listed)
+        return Candidate(kind, a, pos, start=start, fire=fire, meet=meet, gun_ticks=self._gun_ticks(pos, fire),
+                         rank=meet)
+
+    def _air_job(self, kind, a, pos, fire, meet, t, abort):
         tick0 = self.w.tick(a.t_x)  # tick the observed x belongs to
 
         def tick_of():
@@ -422,46 +524,36 @@ class HeuristicPolicy:
         return job
 
     # --------------------------------------------------------------- troopers
-    def _start_trooper(self, t):
+    def _trooper_candidates(self, t, exclude=None):
         w = self.w
-        cands = w.candidates()
+        cands = [tr for tr in w.candidates() if tr is not exclude]
         if not cands:
-            return False
+            return []
         ranked = sorted(cands, key=lambda tr: urgency(tr, w.landed)[0])
         free_planned = 0
+        out = []
         for tr in ranked[:4]:
-            over = urgency(tr, w.landed)[1]
+            u, over = urgency(tr, w.landed)
             # above a landed trooper: a chute-only shot (it falls onto the one
             # below and both are removed) if one is likely enough, else kill it
             crush = self._crush_plan(tr) if over else None
             if crush:
-                # directly above a landed trooper: shoot only the chute -- it
-                # falls onto the one below and both are removed
                 pos, fire, meet, clamp, p_hit = crush
                 part = "chute_only"
             elif tr.state == "canopy":
-                # prefer a shot that overlaps at a drawn position (kills ~91%);
-                # else one whose only contact is between ticks (~61%)
-                part, p_hit = "canopy", TB.P_DRAWN
+                # prefer a shot that overlaps at a drawn position (kills ~90%);
+                # else one whose only contact is between ticks (~12%)
+                part, p_hit = "canopy", PP.Q_KILL
                 plan = P.plan_trooper(tr.x, tr.y, tr.vy, part, w.barrel, w.clamped, ground_y=w.ground_y(tr.x))
                 if not plan:
                     plan = P.plan_trooper(tr.x, tr.y, tr.vy, part, w.barrel, w.clamped,
                                           ground_y=w.ground_y(tr.x), swept=True)
-                    p_hit = TB.P_SWEPT_ONLY
+                    p_hit = PP.Q_SWEPT
                 if not plan:
                     continue
                 pos, window, meet, clamp = plan
                 mid = len(window) // 2
                 fire = [window[mid]] if len(window) >= 4 else window[max(0, mid - 1):mid + 1]
-            elif os.environ.get("PARATROOPER_FREE") == "pointblank":
-                # previous rule (point-blank body shots only), kept for A/B tests
-                plan = P.plan_trooper(tr.x, tr.y, tr.vy, "body", w.barrel, w.clamped, free=True)
-                if not plan:
-                    continue
-                pos, window, meet, clamp = plan
-                mid = len(window) // 2
-                fire = [window[mid]] if len(window) >= 4 else window[max(0, mid - 1):mid + 1]
-                part, p_hit = "body", 1.0
             else:
                 # free-faller: best shot over every chute-opening scenario
                 if free_planned >= MAX_FREE_PLANS:
@@ -472,18 +564,26 @@ class HeuristicPolicy:
                     continue
                 part, p_hit = "free", pp["p_hit"]
                 pos, fire, meet, clamp = pp["pos"], pp["spawns"], pp["meet_last"], pp["clamp"]
+            start = self._trooper_start(tr, t, part, p_hit, pos, fire, meet, clamp, over)
+            # most urgent first (ties: rank order)
+            out.append(Candidate("trooper", tr, pos, start=start, fire=fire, meet=meet, clamp=clamp, p_hit=p_hit,
+                                 deadline=ticks_left(tr), gun_ticks=self._gun_ticks(pos, fire), rank=u))
+            if len(out) >= MAX_TROOPER_CANDIDATES:
+                break
+        return out
+
+    def _trooper_start(self, tr, t, part, p_hit, pos, fire, meet, clamp, over):
+        def start():
             tr.feasible_ever = True
             y_obs, state = tr.y, tr.state
-            over = urgency(tr, w.landed)[1]
-
             tick0 = self.w.tick(tr.t_y)  # tick the observed y belongs to
 
-            def tick_of(tr=tr, tick0=tick0):
+            def tick_of():
                 if tr not in self.w.troopers:
                     return None
                 return self.w.tick(time.time()) - tick0
 
-            def abort(tr=tr, state=state):
+            def abort():
                 if self.w.bombs:
                     return "bomb"
                 if self.w.phase == 2:
@@ -498,10 +598,11 @@ class HeuristicPolicy:
                                 p_hit=round(p_hit, 3)))
             job.tick0 = tick0
             self._new_job(job)
-            return True
-        return False
+        return start
 
-    def _pre_aim(self, t):
+    def _pre_aim_candidates(self):
+        """Aim at the most urgent free-faller's predicted canopy point (none if
+        the turret is already there or on its way)."""
         w = self.w
         for tr in sorted(w.candidates(), key=lambda tr: urgency(tr, w.landed)[0]):
             if tr.state != "free":
@@ -512,9 +613,10 @@ class HeuristicPolicy:
                 continue
             pos = plan[0]
             if pos == w.barrel or self.pre_aimed == (tr.id, pos):
-                return False
-            if self.turret.goto(pos, {"kind": "stop", "why": "pre_aim"}) is None:
-                return True  # keys not settled: retry next frame
-            self.pre_aimed = (tr.id, pos)
-            return True
-        return False
+                return []
+
+            def start(tr=tr, pos=pos):
+                if self.turret.goto(pos, {"kind": "stop", "why": "pre_aim"}) is not None:
+                    self.pre_aimed = (tr.id, pos)
+            return [Candidate("pre_aim", tr, pos, start=start, gun_ticks=self._gun_ticks(pos))]
+        return []
