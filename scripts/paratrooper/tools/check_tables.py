@@ -1,71 +1,118 @@
-"""Phase 3 gate: table planners vs the old, validated simulators on random
-inputs -- identical decisions required. Also times both.
+"""Gate for the intercept tables: every table entry checked is recomputed by
+brute force (physics.model.simulate against the game's hitboxes; bombs by
+the game's test, bullet by bullet) -- identical meeting ticks required.
+Also times the planners.
     python3 -m paratrooper.tools.check_tables [n]
 """
+import math
 import random
 import sys
 import time
 
-import bomb_model as OB
-import heli_model as OH
-import trooper_model as OT
-
+from ..physics import model as M
 from ..physics import plan as P
+from ..physics import prob_plan as PP
+from ..physics.tables import AX, AY, BR, KINDS, PARTS, TX, TY, VYS, tables
+
+
+def _j(m):
+    return -1 if m is None else m
+
+
+def brute_trooper(lane, part, vy, x, y, swept):
+    def box_at(t):
+        return M.trooper_box(x, y + vy * t, part, free=vy == M.FREE_VY)
+    return _j(M.simulate(M.LANES[lane], box_at, 0, swept=swept))
+
+
+def brute_air(kind, lane, d, y0, x0):
+    box = M.heli_box if kind == "heli" else M.plane_box
+
+    def box_at(t):
+        if not -48 <= x0 + M.HELI_VX * d * math.ceil(t) <= 640:
+            return None  # off screen at that tick
+        return box(x0 + M.HELI_VX * d * t, y0, d)
+    return _j(M.simulate(M.LANES[lane], box_at, 0, swept=kind == "plane"))
+
+
+def brute_bomb(lane, d, xr, f):
+    """Bullet spawning at bomb tick f: each tick it is drawn, it is tested
+    against the bomb where it was before that tick's move."""
+    (sx, sy), (vx, vy) = M.LANES[lane]
+    for j in range(40):
+        ux, uy = sx + vx * j, sy + vy * j
+        if uy < -2 or not -2 <= ux <= 640:
+            return -1
+        b = M.bomb_at(xr, d, f + j - 1)
+        if b is None:
+            if f + j - 1 < 0:
+                continue
+            return -1
+        if M.bomb_hit_code(ux, uy, *b):
+            return j
+    return -1
 
 
 def main(n=3000):
     rnd = random.Random(1)
-    OB.LIMIT_STATE["clamped"] = False
+    T = tables()
     res = {}
-    # bombs
-    bad = 0; t_old = t_new = 0
-    for _ in range(n):
-        d = rnd.choice((-1, 1)); xr = rnd.randrange(0, 11) * 8 + (0 if d > 0 else 536)
-        k = rnd.randrange(1, 25); cur = rnd.choice([None] + list(range(19)))
-        a = time.perf_counter(); o = OB.plan_intercept(xr, d, k, cur); b = time.perf_counter()
-        nw = P.plan_bomb(xr, d, k, cur); c = time.perf_counter()
-        t_old += b - a; t_new += c - b
-        o = None if o is None else (o[0], list(o[1]))
-        bad += o != nw
-    res["bomb"] = (bad, t_old, t_new)
-    # troopers
-    bad = 0; t_old = t_new = 0
-    for _ in range(n):
-        x = rnd.randrange(0, 80) * 8; y = rnd.randrange(20, 180) * 2 + 1
-        state = rnd.choice(("canopy", "free")); part = "canopy" if state == "canopy" else "body"
-        cur = rnd.choice([None] + list(range(19)))
-        tr = OT.Trooper(x, y, 100.0); tr.state = state
-        a = time.perf_counter(); o = OT.plan_trooper(tr, part, cur, 100.0); b = time.perf_counter()
-        # the old planner counted contact between ticks: compare on the swept table
-        nw = P.plan_trooper(x, y, tr.vy, part, cur, free=(state == "free"), swept=True); c = time.perf_counter()
-        t_old += b - a; t_new += c - b
-        o = None if o is None else (o[0], list(o[1]), o[2], o[3])
-        if o != nw:
-            bad += 1
-            if bad <= 3:
-                print("  trooper mismatch", (x, y, state, cur), "old", o, "new", nw)
-    res["trooper"] = (bad, t_old, t_new)
-    # helicopters + planes
-    for kind in ("heli", "plane"):
-        bad = 0; t_old = t_new = 0
+    for name, swept in (("trooper", False), ("trooper_swept", True)):
+        bad = 0
         for _ in range(n):
-            d = rnd.choice((-1, 1)); x0 = rnd.randrange(0, 76) * 8
-            y0 = rnd.choice((17, 29, 41, 65, 89)) if kind == "heli" else 1
-            cur = rnd.choice([None] + list(range(19)))
-            allowed = None if kind == "heli" else range(max(0, cur - 5 if cur else 0), 19)
-            box = OH.heli_box if kind == "heli" else OH.plane_box
-            a = time.perf_counter(); o = OH.plan_heli(x0, y0, d, cur, box=box, allowed=allowed); b = time.perf_counter()
-            nw = P.plan_air(kind, x0, y0, d, cur, allowed=allowed); c = time.perf_counter()
-            t_old += b - a; t_new += c - b
-            o = None if o is None else (o[0], list(o[1]), o[2])
-            if o != nw:
+            lane, pi, vi = rnd.randrange(M.N_LANES), rnd.randrange(2), rnd.randrange(2)
+            xi, yi = rnd.randrange(len(TX)), rnd.randrange(len(TY))
+            want = brute_trooper(lane, PARTS[pi], VYS[vi], int(TX[xi]), int(TY[yi]), swept)
+            got = int(T[name][lane, pi, vi, xi, yi])
+            if got != want:
                 bad += 1
                 if bad <= 3:
-                    print(f"  {kind} mismatch", (x0, y0, d, cur), "old", o, "new", nw)
-        res[kind] = (bad, t_old, t_new)
-    for k, (bad, a, b) in res.items():
-        print(f"{k:8s}: {n - bad}/{n} identical plans | old {a / n * 1000:.2f} ms, new {b / n * 1000:.3f} ms per plan")
+                    print(f"  {name} mismatch", (lane, PARTS[pi], VYS[vi], int(TX[xi]), int(TY[yi])), got, want)
+        res[name] = bad
+    for kind in KINDS:
+        bad = 0
+        for _ in range(n):
+            lane, di = rnd.randrange(M.N_LANES), rnd.randrange(2)
+            yi = rnd.randrange(len(AY)) if kind == "heli" else 3
+            xi = rnd.randrange(len(AX))
+            want = brute_air(kind, lane, (-1, 1)[di], int(AY[yi]), int(AX[xi]))
+            got = int(T[kind][lane, di, yi, xi])
+            if got != want:
+                bad += 1
+                if bad <= 3:
+                    print(f"  {kind} mismatch", (lane, (-1, 1)[di], int(AY[yi]), int(AX[xi])), got, want)
+        res[kind] = bad
+    bad = 0
+    for _ in range(n):
+        lane, di, ri, f = rnd.randrange(M.N_LANES), rnd.randrange(2), rnd.randrange(len(BR)), rnd.randrange(len(M.BOMB_YS))
+        want = brute_bomb(lane, (-1, 1)[di], int(BR[ri]), f)
+        got = int(T["bomb"][lane, di, ri, f])
+        if got != want:
+            bad += 1
+            if bad <= 3:
+                print("  bomb mismatch", (lane, (-1, 1)[di], int(BR[ri]), f), got, want)
+    res["bomb"] = bad
+    for k, b in res.items():
+        print(f"{k:14s}: {n - b}/{n} table entries identical to brute force")
+
+    # planner timings
+    def timed(f, cases):
+        a = time.perf_counter()
+        for c in cases:
+            f(*c)
+        return (time.perf_counter() - a) / len(cases) * 1000
+    cur = [rnd.choice([None] + list(range(19))) for _ in range(300)]
+    ms = {
+        "plan_bomb": timed(P.plan_bomb, [((rnd.randrange(0, 11) * 8), 1, rnd.randrange(1, 25), c) for c in cur]),
+        "plan_trooper": timed(P.plan_trooper, [(rnd.randrange(0, 80) * 8, rnd.randrange(20, 180) * 2 + 1,
+                                                M.CANOPY_VY, "canopy", c) for c in cur]),
+        "plan_air": timed(P.plan_air, [("heli", rnd.randrange(0, 76) * 8, 17, 1, c) for c in cur]),
+        "plan_free": timed(PP.plan_free, [(rnd.randrange(0, 80) * 8, rnd.randrange(20, 115) * 2 + 1, 5, c)
+                                          for c in cur[:50]]),
+    }
+    print("ms per plan:", {k: round(v, 3) for k, v in ms.items()})
+    return sum(res.values()) == 0
 
 
 if __name__ == "__main__":
-    main(*(int(a) for a in sys.argv[1:]))
+    sys.exit(0 if main(*(int(a) for a in sys.argv[1:])) else 1)

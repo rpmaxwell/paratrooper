@@ -203,21 +203,21 @@ def recorded_games(root):
 
 # ---- troopers ------------------------------------------------------------------------
 # native px relative to the body's top-left (perception: 4x6 body), (c0, c1, r0, r1)
-# = physics.model.trooper_box halved: body x..x+7, y-4..y+11 / canopy x-8..x+15, y-32..y-5
+# = the old "model" trooper box halved: body x..x+7, y-4..y+11 / canopy x-8..x+15, y-32..y-5
 MODEL_TROOPER_BOX = {"body": (0, 3, -2, 5), "canopy": (-4, 7, -16, -3)}
 # Finding (2026-10-07, 235 recorded games, ~9.9k labelled bullet outcomes near
 # troopers): NOT the helicopters' +8 px shift (that scores 82.0% vs 86.6%
 # unshifted), but bigger boxes -- fit_trooper_box: body as wide as the canopy
 # (game x-8..x+15, y-12..y+13), canopy down to the body top (y-32..y+1).
 # 91.7% exact (held-out half: 91.7% vs 86.4%); drawn-position contact kills
-# 93.7%, between-tick-only contact 11.6%. = physics.model.TROOPER_BOXES["fitted"].
+# 93.7%, between-tick-only contact 11.6%. (The old "fitted" variant.)
 FITTED_TROOPER_BOX = {"body": (-4, 7, -6, 6), "canopy": (-4, 7, -16, 0)}
 # Which PART dies (kill_part_events, 2026-10-07, 1,536 kills next to canopy
 # troopers): the canopy/body split is where the model has it (canopy down to
 # game y-5, body from y-4) but both parts are the full 24 px wide, and a
 # free-faller's body box is taller (its sprite has the arms up). Same overall
 # extent as FITTED_TROOPER_BOX, right part 94.9% vs 86.0% (v1) / 81.8% (model).
-# = physics.model.TROOPER_BOXES["fitted_parts"].
+# = physics.model.TROOPER_BOX_OFFSETS (confirmed by the game's code).
 FITTED_PARTS_TROOPER_BOX = {"canopy": (-4, 7, -16, -3), "body": (-4, 7, -2, 6), "body_free": (-4, 7, -6, 6)}
 TROOPER_VY = {"free": 4, "canopy": 2}   # native px per tick
 

@@ -9,7 +9,9 @@ and with --record the game's distinct native frames (game_<t0>.npz) for
 offline audits; with --mem the game's state bytes from its memory
 (io/memory.py, STATE_LO..STATE_HI) on every frame (game_<t0>_mem.npz).
 """
+import hashlib
 import os
+import pathlib
 import sys
 import time
 
@@ -22,7 +24,6 @@ from .perception.memstate import MemState
 from .io.screen import Screen
 from .perception.barrel import barrel_pos
 from .perception.hud import is_done, read_score
-from .physics import model as M
 from .policy.heuristic import HeuristicPolicy
 from .telemetry.writer import Writer
 from .world.world import World
@@ -30,6 +31,8 @@ from .world.world import World
 # PARATROOPER_MEM_FEED=1: the world takes helicopters, troopers, bombs,
 # bullets, the barrel and the tick clock from the game's memory (implies --mem)
 MEM_FEED = os.environ.get("PARATROOPER_MEM_FEED") == "1"
+# identifies the code an A/B arm ran (the container has no .git): a hash of the package source
+CODE_HASH = hashlib.sha1(b"".join(f.read_bytes() for f in sorted(pathlib.Path(__file__).parent.rglob("*.py")))).hexdigest()[:10]
 STALL_S = 30.0  # no screen change this long = frozen / paused (quiet sky between waves lasts a few s)
 
 CSV_HEADER = ("finished_at,game,score,duration_s,bombs_seen,bombs_shot,bombs_landed,troopers_body,"
@@ -63,9 +66,8 @@ def play_game(screen, keys, writer, out_dir, n, record=False, log=_log, mem=None
     policy = HeuristicPolicy(world, turret, log=lambda m: log(f"[{time.time() - t0:7.2f}] {m}"))
     loop_ms, frames = [], []
     mem_t, mem_snaps = [], []     # --mem: the game's state bytes, read right after each grab
-    emit(dict(type="game_start", t0=t0, game=n, heli_box=M.HELI_BOX, trooper_box=M.TROOPER_BOX,
-              bomb_box=M.BOMB_BOX, phit=os.environ.get("PARATROOPER_PHIT", "model"),
-              bomb_pairs=os.environ.get("PARATROOPER_BOMB_PAIRS") == "1", mem_feed=MEM_FEED))
+    emit(dict(type="game_start", t0=t0, game=n, boxes="code", phit="calibrated", bomb_pairs=True,
+              mem_feed=MEM_FEED, code=CODE_HASH))
     last_change, stall_start, stalled_s = time.time(), None, 0.0
     while True:
         t, frame, changed = screen.grab()

@@ -12,25 +12,16 @@ it -- and how many ticks later?" is a pure function of (L, p):
 
 Values are j = ticks from spawn to meeting (-1 = miss); planners add the
 spawn tick and apply reachability / landing cutoffs. Built with
-physics.model.simulate (same semantics as the validated old simulators)
-and cached in data/tables.npz (data/tables_heli_fitted.npz under
-PARATROOPER_HELI_BOX=fitted, tables_trooper_fitted.npz under
-PARATROOPER_TROOPER_BOX=fitted, both: tables_heli_fitted_trooper_fitted.npz;
-see model.HELI_BOX / TROOPER_BOX);
-`python3 -m paratrooper.physics.tables` rebuilds the selected variant.
+the game's hitboxes (physics/model.py) and cached in data/tables.npz;
+`python3 -m paratrooper.physics.tables` rebuilds it.
 """
-import math
 import pathlib
 
 import numpy as np
 
 from . import model as M
 
-# one cache per variant combination; the default stays tables.npz and the
-# helicopter-only variant tables_heli_fitted.npz, as before
-_VARIANT = "".join(f"_{kind}_{v}" for kind, v in (("heli", M.HELI_BOX), ("trooper", M.TROOPER_BOX),
-                                                    ("bomb", M.BOMB_BOX)) if v != "model")
-CACHE = pathlib.Path(__file__).resolve().parents[1] / "data" / f"tables{_VARIANT}.npz"
+CACHE = pathlib.Path(__file__).resolve().parents[1] / "data" / "tables.npz"
 
 # trooper grid: x even 0..638, y (body top at spawn tick) odd -99..399
 TX = np.arange(0, 640, 2)
@@ -44,25 +35,15 @@ KINDS = ("heli", "plane")
 # bombs: release x -24..664 in steps of 8, spawn tick 0..33
 BR = np.arange(-24, 665, 8)
 MAX_J = 40
-# Troopers: the game registers a hit where the bullet is DRAWN each tick, not
-# along its path in between (2026-09-29, 192 logged shots: when the only
-# contact was between ticks, 39% of targets still landed vs 9% with a
-# drawn-position overlap -- fast bullets tunnel through a 16 px body). Bombs
-# and aircraft keep the swept check (helicopters: see AIR_SUBSTEPS).
+# Troopers and helicopters: the game registers a hit where the bullet is
+# DRAWN each tick, not along its path in between (fast bullets tunnel through
+# a 16 px body). The swept tables ("trooper_swept", "trooper_bits_swept") also
+# count contact between ticks, which still kills ~12% of the time
+# (prob_plan.Q_SWEPT). Planes keep the swept check; bombs use the game's test
+# (model.bomb_hit_code).
 TROOPER_SUBSTEPS = (1.0,)
-# ...but between-tick-only contact still killed 61% of the time (46/75) vs 91%
-# (106/117) for drawn-position contact: the planners weight each by its rate.
-# (j == 0 -- the spawn tick itself -- is always a single drawn check.)
-# Under PARATROOPER_TROOPER_BOX=fitted (frame-level, 2026-10-07) the bigger box
-# makes contact nearly deterministic: drawn-position contact kills 93.7%
-# (n=2061), between-tick-only contact 11.6% (n=535) -- the old 61% was the
-# too-small box missing drawn-position hits.
-# "fitted_parts" has the same overall extent as "fitted", so the same rates.
-P_DRAWN, P_SWEPT_ONLY = {"model": (0.91, 0.61), "fitted": (0.94, 0.12), "fitted_parts": (0.94, 0.12)}[M.TROOPER_BOX]
 SWEPT = (0.25, 0.5, 0.75, 1.0)
-# Helicopters: swept under the "model" variant, drawn-only under "fitted"
-# (frame-level fit, see model.HELI_BOX); planes stay swept.
-AIR_SUBSTEPS = {"heli": SWEPT if M.HELI_SWEPT else (1.0,), "plane": SWEPT}
+AIR_SUBSTEPS = {"heli": (1.0,), "plane": SWEPT}
 
 
 def _trooper_table(substeps=None):
@@ -140,10 +121,10 @@ def _air_table(kind):
     return A
 
 
-def _bomb_table_code():
-    """BOMB_BOX="code": the game's test (model.bomb_hit_code) at drawn
-    positions, the bomb one tick behind the bullet (bullets move and are
-    tested before the bombs move)."""
+def _bomb_table():
+    """The game's test (model.bomb_hit_code) at drawn positions, the bomb one
+    tick behind the bullet (bullets move and are tested before the bombs
+    move)."""
     B = np.full((M.N_LANES, 2, len(BR), len(M.BOMB_YS)), -1, np.int8)
     for li, ((sx, sy), (vx, vy)) in enumerate(M.LANES):
         for di, d in enumerate((-1, 1)):
@@ -162,29 +143,6 @@ def _bomb_table_code():
                         if M.bomb_hit_code(ux, uy, bx, by):
                             B[li, di, ri, f] = j
                             break
-    return B
-
-
-def _bomb_table():
-    if M.BOMB_BOX == "code":
-        return _bomb_table_code()
-    B = np.full((M.N_LANES, 2, len(BR), len(M.BOMB_YS)), -1, np.int8)
-    for li, lane in enumerate(M.LANES):
-        for di, d in enumerate((-1, 1)):
-            for ri, xr in enumerate(BR):
-                def box_at(kf, xr=xr, d=d):
-                    k0 = math.floor(kf)
-                    a = M.bomb_at(xr, d, k0)
-                    b = M.bomb_at(xr, d, math.ceil(kf))
-                    if a is None or b is None:
-                        return None
-                    fr = kf - k0
-                    x, y = a[0] + (b[0] - a[0]) * fr, a[1] + (b[1] - a[1]) * fr
-                    return x, y, x + 7, y + 7
-                for f in range(len(M.BOMB_YS)):
-                    m = M.simulate(lane, box_at, f)
-                    if m is not None:
-                        B[li, di, ri, f] = m - f
     return B
 
 

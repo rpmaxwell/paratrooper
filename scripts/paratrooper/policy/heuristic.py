@@ -19,21 +19,18 @@ A Job is one engagement: move -> (clamp) -> fire at planned ticks, timed
 off the target's own tick counter. Everything is non-blocking: step()
 does a little work per frame and returns.
 """
-import os
 import time
 
 from ..physics import model as M
 from ..physics import plan as P
 from ..physics import prob_plan as PP
-from ..physics import tables as TB
 
 DEFAULT_PARK = {1: 14, -1: 4}   # 125.8 deg for bombs from the left, 55.8 from the right
 PLANE_MAX_PARK_DIST = 5
 MAX_BOMB_IN_FLIGHT = 3
 # Round-4 bombers drop bombs in pairs 2-4 ticks apart; planning the first
-# alone leaves the second out of reach most of the time. "1": plan a pair
-# from one position (physics.plan.plan_bomb_pair).
-BOMB_PAIRS = os.environ.get("PARATROOPER_BOMB_PAIRS") == "1"
+# alone leaves the second out of reach most of the time, so a pair is
+# planned from one position (physics.plan.plan_bomb_pair).
 MAX_PAIR_GAP = 6       # release ticks apart to count as a pair
 LATE_GAP_S = 30
 P_MIN = 0.5            # engage a free-faller when the best shot hits with at least this probability
@@ -325,7 +322,7 @@ class HeuristicPolicy:
         return True
 
     def _start_bomb(self, b, t):
-        partner = self._bomb_partner(b) if BOMB_PAIRS else None
+        partner = self._bomb_partner(b)
         if partner and self._start_bomb_pair(b, *partner):
             return
         plan = P.plan_bomb(b.x_release, b.dir, b.k, self.w.barrel, self.w.clamped)
@@ -440,28 +437,19 @@ class HeuristicPolicy:
                 pos, fire, meet, clamp, p_hit = crush
                 part = "chute_only"
             elif tr.state == "canopy":
-                # prefer a shot that overlaps at a drawn position (kills ~91%);
-                # else one whose only contact is between ticks (~61%)
-                part, p_hit = "canopy", TB.P_DRAWN
+                # prefer a shot that overlaps at a drawn position (kills ~90%);
+                # else one whose only contact is between ticks (~12%)
+                part, p_hit = "canopy", PP.Q_KILL
                 plan = P.plan_trooper(tr.x, tr.y, tr.vy, part, w.barrel, w.clamped, ground_y=w.ground_y(tr.x))
                 if not plan:
                     plan = P.plan_trooper(tr.x, tr.y, tr.vy, part, w.barrel, w.clamped,
                                           ground_y=w.ground_y(tr.x), swept=True)
-                    p_hit = TB.P_SWEPT_ONLY
+                    p_hit = PP.Q_SWEPT
                 if not plan:
                     continue
                 pos, window, meet, clamp = plan
                 mid = len(window) // 2
                 fire = [window[mid]] if len(window) >= 4 else window[max(0, mid - 1):mid + 1]
-            elif os.environ.get("PARATROOPER_FREE") == "pointblank":
-                # previous rule (point-blank body shots only), kept for A/B tests
-                plan = P.plan_trooper(tr.x, tr.y, tr.vy, "body", w.barrel, w.clamped, free=True)
-                if not plan:
-                    continue
-                pos, window, meet, clamp = plan
-                mid = len(window) // 2
-                fire = [window[mid]] if len(window) >= 4 else window[max(0, mid - 1):mid + 1]
-                part, p_hit = "body", 1.0
             else:
                 # free-faller: best shot over every chute-opening scenario
                 if free_planned >= MAX_FREE_PLANS:

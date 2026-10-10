@@ -164,11 +164,10 @@ def reliability(D, by=("state", "part"), bins=(0, .5, .6, .7, .8, .9, .95, 1.001
 # the engagement (the stop-press bullet included), every chute-opening
 # scenario (physics/chute.py), a shared timing slip (the plan's tick 0 is off
 # by a tick 17% of the time -- both bullets of a pair slip together), and the
-# hitbox of a chosen variant. The first bullet that touches the trooper
-# decides; it kills with probability q (drawn-position contact is not quite
-# certain), else the next one gets its chance.
-_TABLE_FILES = {"model": "tables.npz", "fitted": "tables_trooper_fitted.npz",
-                "fitted_parts": "tables_trooper_fitted_parts.npz"}
+# game's hitbox (physics/tables.py; "fitted_parts", the only variant left).
+# The first bullet that touches the trooper decides; it kills with
+# probability q (drawn-position contact is not quite certain), else the next
+# one gets its chance.
 _BITS_CACHE = {}
 SLIP = {-1: 0.01, 0: 0.82, 1: 0.17}   # actual spawn - planned spawn, measured on 11.5k planned bullets
 HORIZON = 48
@@ -177,9 +176,10 @@ HORIZON = 48
 def _bits(variant, swept=False):
     key = (variant, swept)
     if key not in _BITS_CACHE:
-        import pathlib
-        path = pathlib.Path(__file__).resolve().parents[1] / "data" / _TABLE_FILES[variant]
-        _BITS_CACHE[key] = np.load(path)["trooper_bits_swept" if swept else "trooper_bits"]
+        if variant != "fitted_parts":
+            raise ValueError(f"hitbox variant {variant!r}: only the game's box (fitted_parts) is tabled now")
+        from ..physics.tables import tables
+        _BITS_CACHE[key] = tables()["trooper_bits_swept" if swept else "trooper_bits"]
     return _BITS_CACHE[key]
 
 
@@ -271,7 +271,7 @@ def engagement_p(x, y_now, state, s_now, bullets, variant="fitted_parts", q=0.94
         p, tick, cf = bullet_contacts(x, y_now, state, s_now, bl, variant, ground_y)
         qq = np.full(tick.shape, q)
         if q_swept:
-            # contact only between drawn positions: a weaker chance (planner: P_SWEPT_ONLY)
+            # contact only between drawn positions: a weaker chance (planner: prob_plan.Q_SWEPT)
             _, ts, cs = bullet_contacts(x, y_now, state, s_now, bl, variant, ground_y, swept=True)
             only = (tick >= 10 ** 6) & (ts < 10 ** 6)
             tick, cf = np.where(only, ts, tick), np.where(only, cs, cf)
