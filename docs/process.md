@@ -144,7 +144,7 @@ logs `code`, a hash of the package source, to tell A/B arms apart.
 
 **Refactor first (short):**
 1. ~~Make the code-confirmed settings the defaults; delete the `model`/`fitted` variants, their table caches and their switches~~ (done on `rm/refactor`; git keeps the history).
-2. Restructure `heuristic.py` as *enumerate candidate jobs -> score -> pick*. EV targeting needs this slot, and the measured fixes go there: earliest plan within ~0.05 of the best p(hit); priority by the **reach-floor deadline** instead of ticks to ground (the unengaged landings are at the outer columns, where the floor is ~264-288 px); preemptable trooper jobs.
+2. ~~Restructure `heuristic.py` as *enumerate candidate jobs -> score -> pick*~~ (done: `Candidate`, `_candidates`, `_score`; a `decision` record per started job). EV targeting needs this slot, and the measured fixes go there: earliest plan within ~0.05 of the best p(hit); priority by the **reach-floor deadline** instead of ticks to ground (the unengaged landings are at the outer columns, where the floor is ~264-288 px); preemptable trooper jobs.
 
 **Then EV targeting:** score each candidate job as `plan_p x value price - bullets`, per tick of gun time, using `sim/value.py` prices; refit after each policy change (the values describe the current policy).
 
