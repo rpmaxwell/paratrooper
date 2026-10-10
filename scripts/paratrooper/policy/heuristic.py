@@ -1,16 +1,19 @@
-"""Heuristic policy: today's behavior (scripts/bomb_defense.py) on the new
-world model, table planners and non-blocking turret. Baseline for RL and
-the parity target for the refactor.
+"""Heuristic policy on the world model, table planners and non-blocking
+turret: the baseline for expected-value targeting.
 
-Priorities, checked every frame:
-  1. bombs -- a reflex that preempts anything (widest reachable window,
-     <=3 bullets in flight, stop once a bullet's meeting tick has passed
-     and the bomb is gone)
+Priorities:
+  1. bombs -- a reflex that preempts anything: the earliest reachable
+     intercept (a pair of bombs from one plane planned together), <=3
+     bullets in flight, stop once the bomb is gone
   2. phase 2: planes, only from positions near the bomb park position and
      only with no bomb in the air; otherwise park for the entry side
-  3. troopers: most urgent first; canopy (bigger, slower, can crush a
-     landed trooper) else point-blank body; one bullet when the window
-     absorbs +-1 tick, else two; then leave it alone until its meeting tick
+  3. troopers: the fewest ticks until they drop below the reach floor first
+     (less 6 per landed trooper on that side, less 100 for a canopy over a
+     landed one); a chute-only shot over a landed trooper (crush), else a
+     canopy shot, else the free-faller's best p(hit) plan -- the earliest
+     one within P_SLACK of the best (gun time is the constraint). A job
+     that hasn't fired yet yields once to a trooper that would otherwise
+     be lost.
   4. pre-aim at a free-faller's predicted canopy point
   5. helicopters (yield to any new trooper / state change)
   6. late in phase 1 with nothing to do: park left for the planes
@@ -26,7 +29,6 @@ off the target's own tick counter. Everything is non-blocking: step()
 does a little work per frame and returns.
 """
 import math
-import os
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -45,18 +47,9 @@ MAX_PAIR_GAP = 6       # release ticks apart to count as a pair
 LATE_GAP_S = 30
 P_MIN = 0.5            # engage a free-faller when the best shot hits with at least this probability
 MAX_FREE_PLANS = 2     # probability plans per step (2 ms each): most urgent free-fallers only
-# Temporary A/B switch (delete after the A/B; the winner becomes the code):
-#   "v1" -- the priority list above
-#   "v2" -- the measured fixes (docs/process.md, 10-09 diagnosis: gun time is
-#           the constraint): free-fall plans take the earliest meeting tick
-#           within P_SLACK of the best p(hit); troopers are ranked by the
-#           ticks until they drop below the reach floor (not the ground); a
-#           trooper job that has not fired yet yields to a trooper that would
-#           otherwise be lost (once per job).
-POLICY = os.environ.get("PARATROOPER_POLICY", "v1")
-if POLICY not in ("v1", "v2"):
-    raise ValueError(f"PARATROOPER_POLICY={POLICY!r}: expected 'v1' or 'v2'")
-P_SLACK = 0.05 if POLICY == "v2" else 0.0
+# free-fall plans: the earliest last meeting tick among plans within this
+# much of the best p(hit) (A/B 2026-10-09: gun ticks per trooper job 14 -> 12)
+P_SLACK = 0.05
 # plannable troopers enumerated per tick: under the tier score only the most
 # urgent one can win, and each further free-fall / crush plan costs ~3-4 ms
 MAX_TROOPER_CANDIDATES = 1
@@ -69,7 +62,7 @@ def ticks_left(tr):
 
 
 def urgency(tr, landed):
-    ticks = ticks_left(tr) if POLICY == "v2" else (M.GROUND_BODY_Y - tr.y) / tr.vy
+    ticks = ticks_left(tr)
     over = any(abs(lx - tr.x) <= 6 for lx, _ in landed)
     side = sum(1 for lx, _ in landed if (lx < 320) == (tr.x < 320))
     return ticks - 6 * side - (100 if over and tr.state == "canopy" else 0), over
@@ -185,7 +178,7 @@ class HeuristicPolicy:
             if self.job:
                 self._abort("bomb")
             self._start_bomb(max(unplanned, key=lambda b: b.k), t)
-        if self.job and POLICY == "v2":
+        if self.job:
             self._maybe_preempt(t)
         if self.job:
             self._run_job(t)
@@ -220,7 +213,7 @@ class HeuristicPolicy:
                 + (self._park_candidates(1) if late else []))
 
     def _maybe_preempt(self, t):
-        """v2: a trooper job that hasn't fired (still moving / clamping)
+        """A trooper job that hasn't fired (still moving / clamping)
         yields, once, to another trooper that would drop out of reach before
         this job's last bullet plus the move to it -- if its own target
         survives that detour. Checked once per game tick."""

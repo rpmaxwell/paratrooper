@@ -24,7 +24,7 @@ from .perception.memstate import MemState
 from .io.screen import Screen
 from .perception.barrel import barrel_pos
 from .perception.hud import is_done, read_score
-from .policy.heuristic import POLICY, HeuristicPolicy
+from .policy.heuristic import HeuristicPolicy
 from .telemetry.writer import Writer
 from .world.world import World
 
@@ -67,7 +67,7 @@ def play_game(screen, keys, writer, out_dir, n, record=False, log=_log, mem=None
     loop_ms, frames = [], []
     mem_t, mem_snaps = [], []     # --mem: the game's state bytes, read right after each grab
     emit(dict(type="game_start", t0=t0, game=n, boxes="code", phit="calibrated", bomb_pairs=True,
-              mem_feed=MEM_FEED, policy=POLICY, code=CODE_HASH))
+              mem_feed=MEM_FEED, code=CODE_HASH))
     last_change, stall_start, stalled_s = time.time(), None, 0.0
     while True:
         t, frame, changed = screen.grab()
