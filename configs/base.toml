@@ -1,0 +1,23 @@
+# The current champion. Experiments extend this and change one thing.
+name = "base"
+games = 10
+
+[emulator]
+speed = "realtime"
+cycles = 3000
+
+[observer]
+kind = "vision"
+
+[actuator]
+kind = "xtest"
+
+[policy]
+kind = "heuristic"
+
+[policy.params]
+# defaults live in policy/heuristic.py Params; set only what differs
+
+[record]
+frames = "windows"
+memory = true

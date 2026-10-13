@@ -3,6 +3,7 @@ captures/*
 
 # python
 __pycache__/
+*.egg-info/
 *.pyc
 
 # secrets (VNC password)
@@ -12,9 +13,12 @@ __pycache__/
 .claude/
 .DS_Store
 
-# notebook environment (see notebooks/requirements.txt)
+# python environment (pyproject.toml; lab/notebooks/requirements.txt for notebooks)
 .venv/
 .ipynb_checkpoints/
 
 # agent handoff notes
 .handoff/
+
+# run output (runs/<date>_<name>/...; see paratrooper/record/store.py)
+runs/

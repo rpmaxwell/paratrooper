@@ -1,0 +1,7 @@
+# Helicopters, troopers, bombs, bullets, barrel and tick from game memory
+# (observe/memory.py) instead of the screen. Not yet A/B tested live.
+extends = "../base.toml"
+name = "memory_observer"
+
+[observer]
+kind = "memory"

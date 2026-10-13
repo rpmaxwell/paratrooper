@@ -294,6 +294,18 @@ Branch `rm/refactor`:
   50%. Score was 1,417 vs 1,499, within noise. Promoted as the baseline; the
   preempt check doubled loop p99 (~9 ms), noted for the EV work.
 
+Branch `rm/reorganize` (2026-10-13): **the layout this repo has now.** The
+54 original scripts were deleted (tag `pre-rebuild` keeps them). The
+package moved to the repo root and split by question: `game/` (facts),
+`observe/` (vision | memory -> one Observation), `act/`, `control/`,
+`policy/`, `world/`, `record/`, `emulator/`. Variants became config kinds
+and params in TOML files instead of env vars and folder names, with every
+run saving its resolved config and git sha, and finished experiments
+archiving both arms' configs. Exploration moved to `lab/`. Checked by
+replaying three recorded games through the old and new code with both
+observers and the policy running: the event streams were byte-identical
+(14,212 events).
+
 ---
 
 ## Lessons that kept coming back

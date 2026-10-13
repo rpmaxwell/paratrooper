@@ -1,0 +1,21 @@
+[project]
+name = "paratrooper"
+version = "0.1.0"
+description = "A bot for Paratrooper (1982) under DOSBox-X: perception, physics, targeting, and recorded runs."
+requires-python = ">=3.12"
+# the container (docker/Dockerfile) installs the same runtime deps with pip
+dependencies = ["numpy", "scipy", "pillow"]
+
+[project.optional-dependencies]
+live = ["mss", "python-xlib"]          # screen capture + XTEST keys (in the container)
+analysis = ["duckdb", "pandas", "matplotlib"]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["paratrooper*"]
+
+[tool.setuptools.package-data]
+paratrooper = ["game/data/*", "observe/templates/*.png"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
