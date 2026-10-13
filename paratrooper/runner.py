@@ -19,6 +19,7 @@ import numpy as np
 from . import config as C
 from .control.turret import Turret
 from .emulator.process_memory import STATE_HI, STATE_LO, GameMemory
+from .observe.barrel import barrel_pos
 from .observe.hud import is_done, read_score
 from .observe.screen import Screen
 from .record.audit import bullet_audit
@@ -49,10 +50,12 @@ def running_emulator():
 
 
 def wait_for_game(screen, keys, timeout=15):
+    """A game is in play when the game-over text is gone AND the turret is
+    drawn -- a blank screen while DOSBox-X boots is neither."""
     t0 = time.time()
     while time.time() - t0 < timeout:
         _, f, _ = screen.grab()
-        if not is_done(f):
+        if not is_done(f) and barrel_pos(f) is not None:
             return True
         keys.tap("space")
         time.sleep(0.8)
