@@ -56,3 +56,22 @@ def test_run_and_archive(tmp_path):
     assert meta["b"]["mean_score"] == 150.0 and meta["b"]["status"] == "pending"
     again = C.load(paths[0])          # an archived config is directly runnable
     assert again.meta["git_sha"] == m["git"]["sha"]
+
+
+def test_bullet_audit_on_fixture_with_memory():
+    """With the memory observer every bullet is tracked by its slot, so the
+    audit finds no lost bullets and no false hits."""
+    import pathlib
+    from paratrooper.cli.replay import load_game, replay
+    from paratrooper.emulator.process_memory import STATE_LO
+    from paratrooper.record.audit import bullet_audit
+    fix = pathlib.Path(__file__).parent / "fixtures" / "g_short"
+    t, frames, snaps = load_game(fix)
+    audits = {}
+    for credit in (False, True):
+        cfg = C.load(store.REPO / "configs" / "base.toml", ["observer.kind=memory", f"world.credit_by_score={str(credit).lower()}"])
+        ev, w, _ = replay(cfg, t, frames, snaps)
+        a = audits[credit] = bullet_audit(ev, w.frame_ticks, snaps[:len(w.frame_ticks)], STATE_LO)
+        assert a["bullets"] > 50 and a["ended_early"] == 0 and a["false_hit"] == 0
+    # score crediting only adds credits, and none of them to bullets that flew on
+    assert audits[True]["credited"] >= audits[False]["credited"] > 0.85 * audits[False]["collisions"]

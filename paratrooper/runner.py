@@ -21,6 +21,7 @@ from .control.turret import Turret
 from .emulator.process_memory import STATE_HI, STATE_LO, GameMemory
 from .observe.hud import is_done, read_score
 from .observe.screen import Screen
+from .record.audit import bullet_audit
 from .record.game import GameRecorder
 from .record.store import load_arm
 from .record.writer import Writer
@@ -79,7 +80,7 @@ def play_game(parts, arm_dir, index, ids, log=_log):
     t0 = time.time()
     rec = GameRecorder(arm_dir, f"g{index:03d}", cfg.record, parts.writer)
     emit = rec.emit
-    world = World(t0, emit)
+    world = World(t0, emit, credit_by_score=cfg.world.credit_by_score)
     turret = Turret(keys, world)
     policy = parts.policy_cls(world, turret, log=lambda m: log(f"[{time.time() - t0:7.2f}] {m}"), params=parts.params)
     loop_ms = []
@@ -131,6 +132,9 @@ def play_game(parts, arm_dir, index, ids, log=_log):
                    loop_ms=dict(p50=float(np.median(lp)), p99=float(np.percentile(lp, 99)), max=float(lp.max()),
                                 frames=len(loop_ms)))
     emit(dict(type="game", tick=world.tick(time.time()), **{k: v for k, v in summary.items() if k not in ids}))
+    if rec.mem:
+        _, tks, snaps = zip(*rec.mem)
+        summary["bullet_audit"] = bullet_audit(rec.events, tks, snaps, STATE_LO)
     rec.close(summary, mem_lo=STATE_LO, mem_base=mem.base if mem else None)
     log(f"GAME {index}: score {score} in {dur - stalled_s:.0f}s active ({stalled_s:.0f}s stalled) | loop p50 "
         f"{np.median(lp):.2f} ms p99 {np.percentile(lp, 99):.2f} ms max {lp.max():.1f} | {world.stats}")

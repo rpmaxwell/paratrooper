@@ -20,6 +20,7 @@ from .. import config as C
 from ..act.fake import FakeKeys
 from ..control.turret import Turret
 from ..emulator.process_memory import STATE_LO
+from ..record.audit import bullet_audit
 from ..world.world import World
 
 BASE = pathlib.Path(__file__).resolve().parents[2] / "configs" / "base.toml"
@@ -61,7 +62,9 @@ def fake_clock():
 
 
 def replay(cfg, t, frames, snaps=None, policy=True, emit=None):
-    """-> (events, world, policy or None). Mirrors runner.play_game's loop."""
+    """-> (events, world, policy or None). Mirrors runner.play_game's loop.
+    world.frame_ticks: the world tick of every frame (skipped duplicates
+    take the previous one), the numbering events use."""
     events = []
     emit = emit or events.append
     observer = C.load_kind("observer", cfg.observer.kind)()
@@ -69,7 +72,7 @@ def replay(cfg, t, frames, snaps=None, policy=True, emit=None):
         raise ValueError("the memory observer needs a recording with memory")
     with fake_clock() as now:
         now[0] = float(t[0])
-        world = World(float(t[0]), emit)
+        world = World(float(t[0]), emit, credit_by_score=cfg.world.credit_by_score)
         keys = FakeKeys()
         turret = Turret(keys, world)
         pol = None
@@ -77,9 +80,11 @@ def replay(cfg, t, frames, snaps=None, policy=True, emit=None):
             cls = C.load_kind("policy", cfg.policy.kind)
             pol = cls(world, turret, log=lambda m: None, params=C.policy_params(cfg))
         prev = None
+        world.frame_ticks = ticks = []
         for i in range(len(t)):
             frame = frames[i]
             if prev is not None and np.array_equal(frame, prev):
+                ticks.append(ticks[-1])
                 continue
             prev = frame
             now[0] = ti = float(t[i])
@@ -90,6 +95,7 @@ def replay(cfg, t, frames, snaps=None, policy=True, emit=None):
                 turret.step(ti)
             obs = observer.observe(frame, snap)
             world.update(ti, frame, obs.sprites, obs.barrel, obs.mem_tick)
+            ticks.append(world.tick(ti))
             if world.done:
                 break
             if pol:
@@ -122,5 +128,8 @@ def main(argv):
         t0 = time.perf_counter()
         events, world, _ = replay(cfg, t, frames, snaps, policy=not a.no_policy)
         print(f"{g}: {len(t)} frames in {time.perf_counter() - t0:.1f}s, {world.stats}")
+        if snaps is not None:
+            n = len(world.frame_ticks)
+            print("  bullet audit:", bullet_audit(events, world.frame_ticks, snaps[:n], STATE_LO))
         allev += events
     report(allev)

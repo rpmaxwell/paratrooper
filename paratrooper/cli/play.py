@@ -47,7 +47,9 @@ def _get(row, key):
 
 
 COMPARE = ("score", "world.trooper_landed", "world.trooper_body_killed", "world.trooper_chute_killed",
-           "world.aircraft_down", "world.bombs_landed", "world.shots", "active_s")
+           "world.aircraft_down", "world.bombs_landed", "world.shots", "world.unexplained_fates", "active_s",
+           "bullet_audit.credit_rate", "bullet_audit.uncredited", "bullet_audit.ended_early", "bullet_audit.false_hit",
+           "bullet_audit.edge_called_hit")
 
 
 def compare(run):

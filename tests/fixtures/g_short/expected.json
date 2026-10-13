@@ -19,7 +19,8 @@
     "aircraft_down": 20,
     "bombs_shot": 3,
     "bombs_landed": 0,
-    "unexplained_fates": 3
+    "unexplained_fates": 3,
+    "hits_by_score": 0
    },
    "n_events": 465,
    "decisions": 49
@@ -41,7 +42,8 @@
     "aircraft_down": 21,
     "bombs_shot": 3,
     "bombs_landed": 0,
-    "unexplained_fates": 2
+    "unexplained_fates": 2,
+    "hits_by_score": 0
    },
    "n_events": 460,
    "decisions": 45

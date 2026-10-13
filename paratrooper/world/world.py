@@ -25,6 +25,11 @@ AIR_GONE_S = 0.3
 BULLET_GONE_TICKS = 1.6   # not seen at its next position this long -> ended
 EVIDENCE_TICKS = 4        # bullet end <-> entity change must be this close
 STILL_TICKS = 5           # a trooper body that hasn't moved this long has landed
+# credit_by_score: points per kill by hitbox region, how far back / ahead of a
+# bullet's end to look for the score gain, and how close the target must be
+POINTS = {"canopy": 5, "body": 5, "heli": 10, "plane": 10, "bomb": 30}
+SCORE_BACK_TICKS, SCORE_WAIT_TICKS = 3, 4
+SCORE_NEAR_PX = 16
 LANDED_STILL_TICKS = 6    # a head counts as landed once it hasn't moved for this long
 _ids = count(1)
 
@@ -99,8 +104,12 @@ class Bullet:
 
 
 class World:
-    def __init__(self, t0, emit):
+    def __init__(self, t0, emit, credit_by_score=False):
         self.emit = emit
+        self.credit_by_score = credit_by_score
+        self.score_log, self.press_log = [], []     # (tick, delta), tick: for credit_by_score
+        self.claimed_points = []                    # (tick, points) already explained by credited hits
+        self.deferred = []                          # vanished bullets waiting for a score gain
         self.clock = GameClock(t0)
         self.t0 = t0
         self.phase = 1
@@ -125,7 +134,7 @@ class World:
                           hits=0, left_screen=0,
                           unexplained_ends=0, trooper_body_killed=0, trooper_chute_killed=0,
                           trooper_landed=0, trooper_fell_dead=0, crushed=0, aircraft_down=0,
-                          bombs_shot=0, bombs_landed=0, unexplained_fates=0)
+                          bombs_shot=0, bombs_landed=0, unexplained_fates=0, hits_by_score=0)
 
     # ------------------------------------------------------------------ utils
     def tick(self, t):
@@ -138,6 +147,7 @@ class World:
         lane = M.lane_id(pos, pos, self.clamped) if pos is not None else None
         b = Bullet(next(_ids), t, lane, ctx)
         self.expected.append(b)
+        self.press_log.append(self.tick(t))
         self.stats["shots"] += 1
         self.emit(dict(type="press", tick=self.tick(t), phase=round(((t - self.clock.t0) % M.TICK_S) / M.TICK_S, 3),
                        shot=b.id, lane=lane, barrel=pos,
@@ -161,7 +171,10 @@ class World:
         sc = read_score(frame)
         if sc != self.score and not self.done:
             self.emit(dict(type="score", tick=tk, old=self.score, new=sc, delta=sc - self.score))
+            self.score_log.append((tk, sc - self.score))
             self.score = sc
+        if self.deferred:
+            self._resolve_deferred(tk)
         moving = (tuple(s.helis), tuple(s.planes_full), tuple(s.bombs), tuple(s.dots))
         if mem_tick is None and self._prev_moving is not None and moving != self._prev_moving:
             self.clock.observe_move(t)
@@ -425,6 +438,7 @@ class World:
                          candidates=[(e, r) for e, r, _, _ in hits])
             for e, r, pt, htk in hits:
                 self.recent_ends.append((htk, b.id, e, r, pt))
+            self.claimed_points.append((tk, POINTS.get(region, 0)))
         elif not (0 < cp[0] < 640 and 0 <= cp[1] <= 399):   # the game frees it at x <= 0 / >= 640, y < 0
             b.end = dict(kind="left_screen", tick=tk, point=cp)
             self.stats["left_screen"] += 1
@@ -446,7 +460,60 @@ class World:
                    lane_v=M.LANES[b.lane][1], v_measured=b.v_measured,
                    lane_ok=lane_ok,
                    first_tick=b.first_tick, path=b.path, end=b.end)
+        if self.credit_by_score and b.end["kind"] == "vanished":
+            self.deferred.append((b, rec))   # emitted once a score gain credits it, or it times out
+            return
         self.emit(rec)
+
+    def _resolve_deferred(self, tk, final=False):
+        """Credit vanished bullets from the score (credit_by_score): points
+        gained since shortly before the bullet ended -- shots fired meanwhile
+        added back, points already explained by other credited hits taken
+        off -- pay for the nearest target on its path worth no more than that."""
+        keep = []
+        for b, rec in self.deferred:
+            lo = b.end["tick"] - SCORE_BACK_TICKS
+            avail = (sum(d for k, d in self.score_log if lo <= k <= tk)
+                     + sum(1 for k in self.press_log if lo - 1 <= k <= tk)
+                     - sum(p for k, p in self.claimed_points if lo <= k <= tk))
+            pick = self._score_target(b, avail) if avail >= min(POINTS.values()) else None
+            if pick:
+                ent, region, point, pts = pick
+                b.end = rec["end"] = dict(kind="hit_by_score", tick=b.end["tick"], point=point, entity=ent,
+                                          region=region, points=pts, score_gain=avail)
+                self.recent_ends.append((b.end["tick"], b.id, ent, region, point))
+                self.claimed_points.append((b.end["tick"], pts))
+                self.stats["unexplained_ends"] -= 1
+                self.stats["hits_by_score"] += 1
+                self.emit(rec)
+            elif final or tk > b.end["tick"] + SCORE_WAIT_TICKS:
+                self.emit(rec)
+            else:
+                keep.append((b, rec))
+        self.deferred = keep
+        self.score_log = [x for x in self.score_log if x[0] >= tk - 40]
+        self.press_log = [x for x in self.press_log if x >= tk - 40]
+        self.claimed_points = [x for x in self.claimed_points if x[0] >= tk - 40]
+
+    def _score_target(self, b, avail):
+        """Nearest target to the bullet's next few positions, within
+        SCORE_NEAR_PX of its hitbox and worth <= avail points.
+        -> (entity, region, point, points) or None."""
+        (vx, vy) = M.LANES[b.lane][1]
+        tb = self.tick(b.t)
+        best = None
+        for m in (1, 2, 3):
+            for s in (0.25, 0.5, 0.75, 1.0):
+                f = m - 1 + s
+                p = (b.pos[0] + vx * f, b.pos[1] + vy * f)
+                for ent, region, (x0, y0, x1, y1) in self._entity_boxes(tb + f):
+                    pts = POINTS.get(region, 0)
+                    if not pts or pts > avail:
+                        continue
+                    d = max(x0 - p[0], p[0] - x1, 0) + max(y0 - p[1], p[1] - y1, 0)
+                    if d <= SCORE_NEAR_PX and (best is None or (d, -pts) < best[0]):
+                        best = ((d, -pts), (ent, region, (round(p[0]), round(p[1])), pts))
+        return best[1] if best else None
 
     def _entity_boxes(self, T):
         """Every entity's hitbox(es) at game tick T (float), stepped from the
@@ -634,6 +701,7 @@ class World:
                            engagements=tr.engagements, last_y=tr.y))
         for b in list(self.bullets):
             self._end_bullet(b, tk)
+        self._resolve_deferred(tk, final=True)
 
 
 def _steps_on_lane(b, p):

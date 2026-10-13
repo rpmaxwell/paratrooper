@@ -63,6 +63,14 @@ class Policy:
 
 
 @dataclass
+class World:
+    # a bullet that ended mid-screen with no hit in view is credited from the
+    # score: a gain matching a target's value (trooper 5, aircraft 10, bomb 30)
+    # within a few ticks, given to the nearest such target on its path
+    credit_by_score: bool = False
+
+
+@dataclass
 class Record:
     frames: str = "none"        # none | windows (around misses and unexplained fates) | all
     window_ticks: int = 40      # frames kept on each side of an event of interest
@@ -77,6 +85,7 @@ class Config:
     observer: Observer = field(default_factory=Observer)
     actuator: Actuator = field(default_factory=Actuator)
     policy: Policy = field(default_factory=Policy)
+    world: World = field(default_factory=World)
     record: Record = field(default_factory=Record)
     meta: dict = field(default_factory=dict)     # archive only: experiment, git_sha, runs, result, status
 
