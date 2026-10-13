@@ -1,0 +1,52 @@
+{
+ "source": "mem_diag/game_1791521559.npz",
+ "frames": 1400,
+ "expected": {
+  "vision": {
+   "stats": {
+    "shots": 105,
+    "bullets_found": 98,
+    "bullets_not_found": 7,
+    "bullets_unattributed": 14,
+    "hits": 30,
+    "left_screen": 59,
+    "unexplained_ends": 10,
+    "trooper_body_killed": 6,
+    "trooper_chute_killed": 1,
+    "trooper_landed": 2,
+    "trooper_fell_dead": 1,
+    "crushed": 0,
+    "aircraft_down": 20,
+    "bombs_shot": 3,
+    "bombs_landed": 0,
+    "unexplained_fates": 2,
+    "hits_by_score": 1
+   },
+   "n_events": 465,
+   "decisions": 49
+  },
+  "memory": {
+   "stats": {
+    "shots": 99,
+    "bullets_found": 87,
+    "bullets_not_found": 12,
+    "bullets_unattributed": 18,
+    "hits": 30,
+    "left_screen": 61,
+    "unexplained_ends": 3,
+    "trooper_body_killed": 5,
+    "trooper_chute_killed": 1,
+    "trooper_landed": 2,
+    "trooper_fell_dead": 1,
+    "crushed": 0,
+    "aircraft_down": 21,
+    "bombs_shot": 3,
+    "bombs_landed": 0,
+    "unexplained_fates": 2,
+    "hits_by_score": 0
+   },
+   "n_events": 460,
+   "decisions": 45
+  }
+ }
+}

@@ -1,0 +1,53 @@
+name = "credit_by_score"
+games = 10
+
+[emulator]
+speed = "realtime"
+cycles = 3000
+
+
+[observer]
+kind = "vision"
+
+
+[actuator]
+kind = "xtest"
+
+
+[policy]
+kind = "heuristic"
+
+[policy.params]
+park_bombs_from_left = 14
+park_bombs_from_right = 4
+plane_max_park_dist = 5
+max_bomb_in_flight = 3
+max_pair_gap = 6
+late_gap_s = 30
+p_min = 0.5
+max_free_plans = 2
+p_slack = 0.05
+max_trooper_candidates = 1
+
+
+[world]
+credit_by_score = true
+
+
+[record]
+frames = "windows"
+window_ticks = 40
+memory = true
+
+
+[meta]
+experiment = "2026-10-13_ab_base_vs_credit_by_score"
+arm = "credit_by_score"
+date = "2026-10-13"
+git_sha = "a453b6caf067a7df78ea43635da8f5fd4fe2814b"
+git_dirty = false
+run = "runs/2026-10-13_ab_base_vs_credit_by_score"
+games = 6
+mean_score = 767.2
+result = "credit_by_score credits 98.4% of the game's mid-screen bullet ends (656/667) vs 93.6% (1027/1097); false hits unchanged (5.8% vs 5.6% of collisions); unexplained fates 1.0 vs 3.0 per minute. Play identical (replays: every decision and press equal), so the score gap (767 vs 1312) is game luck."
+status = "promoted"

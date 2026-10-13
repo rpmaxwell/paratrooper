@@ -1,0 +1,9 @@
+# DOSBox-X turbo: emulated time runs as fast as the host allows (~85-90x at
+# cycles 300, ~20x at 3000; lab/turbo/README.md). Usable for `up` today;
+# `play` refuses it until the bot's timing counts game ticks.
+extends = "../base.toml"
+name = "turbo"
+
+[emulator]
+speed = "turbo"
+cycles = 300

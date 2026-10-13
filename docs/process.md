@@ -5,7 +5,7 @@ bot is built, step by step, with the code behind each step, what is known
 for certain, what is still estimated, and what to do next. The trial and
 error that led here is in [dev_history.md](dev_history.md).
 
-All paths below are under `scripts/paratrooper/` unless noted.
+All paths below are under `paratrooper/` unless they start with `lab/` or `tests/` (layout and workflow: [CLAUDE.md](../CLAUDE.md)).
 
 ---
 
@@ -17,16 +17,19 @@ runs in the same container, reading the screen and sending keys.
 | what | code |
 |---|---|
 | container, emulator, virtual display, VNC (`./run.sh [n]`) | `docker/`, `run.sh` |
-| screen grab (native 320x200 palette frame) | `io/screen.py` |
-| key input (XTEST on a persistent X connection, non-blocking press/release) | `io/keys.py` |
-| game memory (the game's 64 KB segment, read from the emulator process) | `io/memory.py` |
-| main loop: grab -> barrel -> turret -> world -> policy, per distinct frame | `run.py` |
-| telemetry (one jsonl per game) | `telemetry/writer.py` |
+| screen grab (native 320x200 palette frame) | `observe/screen.py` |
+| key input (XTEST on a persistent X connection, non-blocking press/release) | `act/xtest.py` |
+| game memory (the game's 64 KB segment, read from the emulator process) | `emulator/process_memory.py` |
+| main loop: grab -> barrel -> turret -> world -> policy, per distinct frame | `runner.py` |
+| telemetry (one jsonl per game) | `record/writer.py` |
 
-Run: `docker exec <env vars> paratrooper bash -c "cd /scripts && python3 -m paratrooper.run <n_games> /captures/<dir> [--record] [--mem]"`.
-`--record` saves frames (`game_<t0>.npz`: `frames` uint8 palette indices
-N x 200 x 320, `t` seconds since start), `--mem` the game's state bytes per
-frame (`game_<t0>_mem.npz`). Both are held in RAM and written at game end.
+Run: `python -m paratrooper up`, then `python -m paratrooper play configs/base.toml`
+(host side; games play in the container). Each game goes to
+`runs/<date>_<name>/<arm>/g<K>/`: `events.jsonl`, `summary.json`, and per
+`[record]` `frames.npz` (`frames` uint8 palette indices N x 200 x 320, `t`
+seconds since start, `tick`) and `memory.npz` (the game's state bytes per
+frame). Layout: `record/store.py`. Captures from before 2026-10-13 are in the
+old layout (`captures/<dir>/game_<t0>.jsonl`, `.npz`, `_mem.npz`).
 
 ## Step 1: Reading the game state
 
@@ -34,9 +37,9 @@ frame (`game_<t0>_mem.npz`). Both are held in RAM and written at game end.
 
 | item | how | code |
 |---|---|---|
-| frames | native 320x200, **palette indices 0-3** (black, cyan, magenta, white) | `io/screen.py` |
-| objects | connected components per colour + exact shape lookups: helicopter skids, trooper body, canopy, bomb disc, landed heads; a **bullet is one pixel** | `perception/sprites.py` |
-| turret angle, score, game over | template reads | `perception/barrel.py`, `perception/hud.py` |
+| frames | native 320x200, **palette indices 0-3** (black, cyan, magenta, white) | `observe/screen.py` |
+| objects | connected components per colour + exact shape lookups: helicopter skids, trooper body, canopy, bomb disc, landed heads; a **bullet is one pixel** | `observe/sprites.py` |
+| turret angle, score, game over | template reads | `observe/barrel.py`, `observe/hud.py` |
 | tracking | lifecycles: trooper free fall -> canopy -> fate; aircraft; bombs; our bullets (a ledger: every Up press is a bullet) | `world/world.py` |
 | game tick | inferred from sprite motion (phase-locked clock); a long-running error source (+-1 tick labels) | `world/clock.py` |
 | shot outcomes | a bullet's disappearance matched to a target box on that tick; ~20% of kills uncredited ("lost") | `world/world.py` |
@@ -59,8 +62,8 @@ process by its code bytes and read through `/proc/<pid>/mem`.
 | barrel | DS 1F57: position = 19 - ptr / 2 (0, 0x28 = clamped sight lanes) |
 | score | memory 0x2C10, digits least significant first |
 
-Decoder: `perception/memstate.py` (same shapes as vision). Live feed:
-`PARATROOPER_MEM_FEED=1` (world takes helicopters, troopers, bombs, bullets,
+Decoder: `observe/memstate.py` (same shapes as vision). Live feed:
+`[observer] kind = "memory"` (`configs/observer/memory.toml`; world takes helicopters, troopers, bombs, bullets,
 barrel and tick boundaries from memory; vision keeps planes, landed heads,
 score, game over). Agreement with vision on a recorded round: barrel 99%,
 troopers 553/559, helicopters 97%, bombs 94%. **Not yet A/B tested live.**
@@ -69,14 +72,14 @@ troopers 553/559, helicopters 97%, bombs 94%. **Not yet A/B tested live.**
 
 | item | state | code |
 |---|---|---|
-| turret | 19 positions + 2 clamped sight lanes, ~1 position/tick; **Up stops rotation and fires** (every stop costs a bullet); press -> bullet 3 ticks | `physics/model.py`, `control/turret.py` |
-| bullets | no fixed fire rate: one bullet per Up, 30 slots; all spawn at native (160, 157) and move a fixed (dx, dy) per tick per direction (21 lanes) | `model.LANES` |
-| target motion | helicopters/planes 8 px/tick on per-wave lanes; troopers 8 px/tick free fall, 4 under canopy; bombs: fixed height sequence, x moves with the plane (no "angle": they fall under it) | `model.py` |
-| random processes | helicopter spawning (fitted), drops (**code: rand <= 0x99A, 3.75% per column pass**), chute opening (fitted hazard; the game has a threshold table at DS 0DF5 whose indexing is not yet confirmed), bomb release points | `sim/fit.py`, `sim/params.py`, `sim/sampler.py`, `physics/chute.py` |
-| hitboxes | **all three confirmed from the code**: helicopter 6 columns (48 px) on the 8 px grid, band of 10 rows; trooper canopy/body/chuteless body (the frame fit's `fitted_parts`); bomb ~24 x 28 px tested before the bomb moves. All tested once per tick at the bullet's drawn position. The only boxes in the code; `tools/check_tables` checks every table against brute force | `physics/model.py`, `physics/tables.py` |
-| intercepts | precomputed meeting ticks for every lane x target phase; exact plans for deterministic targets, p(hit) over chute scenarios for free-fallers | `physics/tables.py`, `physics/plan.py`, `physics/prob_plan.py` |
-| p(hit) vs outcomes | stop bullet, timing slip (17% one tick late), kill rate per contact (0.90 drawn, 0.12 between ticks), canopy share 0.75 | `sim/phit.py` (fit), `physics/prob_plan.py` (planner) |
-| the game's code | full listing with labels and cross-references | `tools/disasm.py` -> `captures/derived/paratrooper.asm` |
+| turret | 19 positions + 2 clamped sight lanes, ~1 position/tick; **Up stops rotation and fires** (every stop costs a bullet); press -> bullet 3 ticks | `game/model.py`, `control/turret.py` |
+| bullets | no fixed fire rate: one bullet per Up, 30 slots; all spawn at native (160, 157) and move a fixed (dx, dy) per tick per direction (21 lanes) | `game/model.LANES` |
+| target motion | helicopters/planes 8 px/tick on per-wave lanes; troopers 8 px/tick free fall, 4 under canopy; bombs: fixed height sequence, x moves with the plane (no "angle": they fall under it) | `game/model.py` |
+| random processes | helicopter spawning (fitted), drops (**code: rand <= 0x99A, 3.75% per column pass**), chute opening (fitted hazard; the game has a threshold table at DS 0DF5 whose indexing is not yet confirmed), bomb release points | `lab/calibration/fit.py`, `sim/params.py`, `sim/sampler.py`, `game/chute.py` |
+| hitboxes | **all three confirmed from the code**: helicopter 6 columns (48 px) on the 8 px grid, band of 10 rows; trooper canopy/body/chuteless body (the frame fit's `fitted_parts`); bomb ~24 x 28 px tested before the bomb moves. All tested once per tick at the bullet's drawn position. The only boxes in the code; `tests/check_tables.py` checks every table against brute force | `game/model.py`, `game/tables.py` |
+| intercepts | precomputed meeting ticks for every lane x target phase; exact plans for deterministic targets, p(hit) over chute scenarios for free-fallers | `game/tables.py`, `policy/plan.py`, `policy/prob_plan.py` |
+| p(hit) vs outcomes | stop bullet, timing slip (17% one tick late), kill rate per contact (0.90 drawn, 0.12 between ticks), canopy share 0.75 | `lab/calibration/phit.py` (fit), `policy/prob_plan.py` (planner) |
+| the game's code | full listing with labels and cross-references | `lab/disasm/disasm.py` -> `captures/derived/paratrooper.asm` |
 
 ## Step 3: Heuristics
 
@@ -115,10 +118,11 @@ schedule a short horizon), not argmax per frame.
 
 | tool | use |
 |---|---|
-| telemetry jsonl, `--record`, `--mem` | every game |
-| A/B, one container per arm, arms swapped between batches | `game_start` logs `code` (a hash of the package source; the container has no `.git`) |
-| `tools/mem_diag.py` | per trooper: hit / why the shot missed / never engaged, from memory |
-| `tools/review_crush.py`, `tools/audit_misses.py` | frame-level shot reviews |
+| `events.jsonl`, `summary.json`, `[record] frames / memory` | every game |
+| `bullet_audit` in every `summary.json` (`record/audit.py`): each tracked bullet checked against its memory slot -- hits credited / collisions, false hits, lost bullets | every game with `[record] memory` |
+| `python -m paratrooper ab A.toml B.toml`: arms alternate game by game, both configs archived | `manifest.json` has the git sha; `game_start` also logs `code` (a hash of the package source) |
+| `lab/diagnostics/mem_diag.py` | per trooper: hit / why the shot missed / never engaged, from memory |
+| `lab/diagnostics/review_crush.py`, `lab/diagnostics/audit_misses.py` | frame-level shot reviews |
 | `sim/telemetry.py` + notebook | loading games, fitting the sim |
 
 Results (mean score): 1,049 baseline -> 1,211 fitted helicopter box (40
@@ -134,17 +138,18 @@ within noise on score.
 
 ## Current switches
 
-Code-confirmed settings and the gun-time fixes are the only code path; the
-A/B switches were removed after their A/Bs (git keeps the history).
+Code-confirmed settings and the gun-time fixes are the only code path. The
+switches are config kinds and params (`paratrooper/config.py` KINDS,
+`policy/heuristic.py` Params); finished experiments are in `configs/archive/`.
 
-| variable | values (default first) | recommended |
+| config | values (default first) | recommended |
 |---|---|---|
-| `PARATROOPER_MEM_FEED` | unset, 1 | A/B first |
+| `[observer] kind` | vision, memory | A/B first |
 
 ## Known issues
 
 - Telemetry over-counts landings; use frames/memory.
-- `tools/replay.py` downsamples frames for an older recording size (`[1::2, ::2]`); broken on current recordings.
+- `cli/replay.py` downsamples frames for an older recording size (`[1::2, ::2]`); broken on current recordings.
 - Chute table at DS 0DF5 gives ~1.0-1.7% per step vs a fitted 2.3%+ per tick: indexing not yet understood (check against `--mem` captures: free-fall flag flips + V).
 - Collision code skips the trooper test in game phases 2-4; which phases those are is unconfirmed.
 - Frames and memory recordings are written at game end; a crash loses the game.
@@ -159,8 +164,8 @@ A/B switches were removed after their A/Bs (git keeps the history).
 
 **Then EV targeting:** score each candidate job as `plan_p x value price - bullets`, per tick of gun time, using `sim/value.py` prices; refit after each policy change (the values describe the current policy).
 
-**Cleanup:** replace fitted estimates with the game's (chute table, drop rate); memory as the primary sensor (shrink world.py's vision workarounds); retire `sim/collision.py` box fitting and `show_trooper.py` (`check_heli_box`, `check_trooper_box`, `mem_capture` are gone); refit `sim/phit.py` under the new planner; archive old `captures/`.
+**Cleanup:** replace fitted estimates with the game's (chute table, drop rate); memory as the primary sensor (shrink world.py's vision workarounds); retire `lab/calibration/collision.py` box fitting and `show_trooper.py` (`check_heli_box`, `check_trooper_box`, `mem_capture` are gone); refit `lab/calibration/phit.py` under the new planner; archive old `captures/`.
 
-**Later:** keys through the BIOS keyboard buffer (`PARATROOPER_KEYS=memory`, exact fire ticks); predict chute openings and drops from the random seed (the solver endgame).
+**Later:** keys through the BIOS keyboard buffer (an `[actuator] kind = "bios"`, exact fire ticks); predict chute openings and drops from the random seed (the solver endgame).
 
 **Scope note:** the original PRD forbids emulator memory reads ("the entire point of the POC"). Memory is now used for ground truth and an optional live feed; decide whether the live bot may use it, or whether it stays a calibration/measurement tool.
