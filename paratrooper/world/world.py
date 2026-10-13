@@ -31,7 +31,6 @@ POINTS = {"canopy": 5, "body": 5, "heli": 10, "plane": 10, "bomb": 30}
 SCORE_BACK_TICKS, SCORE_WAIT_TICKS = 3, 4
 SCORE_NEAR_PX = 16
 LANDED_STILL_TICKS = 6    # a head counts as landed once it hasn't moved for this long
-_ids = count(1)
 
 
 @dataclass
@@ -104,9 +103,10 @@ class Bullet:
 
 
 class World:
-    def __init__(self, t0, emit, credit_by_score=False):
+    def __init__(self, t0, emit, credit_by_score=True):
         self.emit = emit
         self.credit_by_score = credit_by_score
+        self._ids = count(1)                        # entity ids, numbered per game
         self.score_log, self.press_log = [], []     # (tick, delta), tick: for credit_by_score
         self.claimed_points = []                    # (tick, points) already explained by credited hits
         self.deferred = []                          # vanished bullets waiting for a score gain
@@ -145,7 +145,7 @@ class World:
         pos (default: the last position read)."""
         pos = self.barrel if pos is None else pos
         lane = M.lane_id(pos, pos, self.clamped) if pos is not None else None
-        b = Bullet(next(_ids), t, lane, ctx)
+        b = Bullet(next(self._ids), t, lane, ctx)
         self.expected.append(b)
         self.press_log.append(self.tick(t))
         self.stats["shots"] += 1
@@ -227,7 +227,7 @@ class World:
                     a = c
                     break
             if a is None:
-                a = Aircraft(next(_ids), kind, y0, x, 0, t, tk)
+                a = Aircraft(next(self._ids), kind, y0, x, 0, t, tk)
                 a.t_x = t
                 self.aircraft.append(a)
             elif x != a.x:
@@ -280,7 +280,7 @@ class World:
                 xr = x - M.BOMB_VX * d * k
                 if not (-24 <= xr <= 200 if d > 0 else 432 <= xr <= 664):
                     continue
-                b = Bomb(next(_ids), d, xr, k, k, t, tk)
+                b = Bomb(next(self._ids), d, xr, k, k, t, tk)
                 self.bombs.append(b)
                 self.bombs_seen += 1
                 self.emit(dict(type="bomb_seen", tick=tk, id=b.id, dir=d, x_release=xr, k=k))
@@ -331,7 +331,7 @@ class World:
             if len(keep) == 1:
                 lane, nxt = keep[0]
                 claimed.add(nxt)
-                b = Bullet(next(_ids), o["t"], lane, {"kind": "unattributed"}, pos=nxt, t=t,
+                b = Bullet(next(self._ids), o["t"], lane, {"kind": "unattributed"}, pos=nxt, t=t,
                            first_tick=o["tick"], path=[(o["tick"],) + o["pos"], (tk,) + nxt],
                            slot=slot_of.get(nxt) if slot_of else None)
                 self.bullets.append(b)
@@ -573,7 +573,7 @@ class World:
             if tr is None:
                 if any(sx == x and abs(sy - y) <= 2 for sx, sy in self.standing):
                     continue  # a trooper already standing here, not a new one
-                tr = Trooper(next(_ids), x, y, t, tk, y)
+                tr = Trooper(next(self._ids), x, y, t, tk, y)
                 tr.y_since = tk
                 tr.t_y = t
                 tr.y_by_tick[tk] = y

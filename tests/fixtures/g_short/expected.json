@@ -8,10 +8,10 @@
     "bullets_found": 98,
     "bullets_not_found": 7,
     "bullets_unattributed": 14,
-    "hits": 29,
+    "hits": 30,
     "left_screen": 59,
-    "unexplained_ends": 11,
-    "trooper_body_killed": 5,
+    "unexplained_ends": 10,
+    "trooper_body_killed": 6,
     "trooper_chute_killed": 1,
     "trooper_landed": 2,
     "trooper_fell_dead": 1,
@@ -19,8 +19,8 @@
     "aircraft_down": 20,
     "bombs_shot": 3,
     "bombs_landed": 0,
-    "unexplained_fates": 3,
-    "hits_by_score": 0
+    "unexplained_fates": 2,
+    "hits_by_score": 1
    },
    "n_events": 465,
    "decisions": 49

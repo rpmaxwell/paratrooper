@@ -31,3 +31,12 @@ def test_observers_agree_on_outcomes():
     """Vision and memory see the same troopers land and die on this game."""
     keys = ("trooper_landed", "trooper_chute_killed", "bombs_shot")
     assert {k: EXPECTED["vision"]["stats"][k] for k in keys} == {k: EXPECTED["memory"]["stats"][k] for k in keys}
+
+
+def test_replays_in_one_process_are_identical():
+    """Entity ids are numbered per game, so two replays compare event by event."""
+    t, frames, snaps = load_game(FIX)
+    cfg = C.load(BASE)
+    a, _, _ = replay(cfg, t, frames, snaps)
+    b, _, _ = replay(cfg, t, frames, snaps)
+    assert json.dumps(a, default=str) == json.dumps(b, default=str)

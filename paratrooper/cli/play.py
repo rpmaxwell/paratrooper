@@ -31,8 +31,13 @@ def _check_emulator(instance, cfgs):
     return emu
 
 
-def _stat(rows, key):
-    vals = [_get(r, key) for r in rows]
+def _get(row, key):
+    for k in key.split("."):
+        row = row.get(k) if isinstance(row, dict) else None
+    return row
+
+
+def _mean_se(vals):
     vals = [v for v in vals if v is not None]
     if not vals:
         return "-"
@@ -40,25 +45,65 @@ def _stat(rows, key):
     return f"{statistics.mean(vals):.1f} ± {sd / len(vals) ** 0.5:.1f}"
 
 
-def _get(row, key):
-    for k in key.split("."):
-        row = row.get(k) if isinstance(row, dict) else None
-    return row
+def _per_min(rows, key):
+    """Per minute of play: games differ in length, so raw counts mislead."""
+    return _mean_se([_get(r, key) / r["active_s"] * 60 if _get(r, key) is not None and r.get("active_s") else None
+                     for r in rows])
 
 
-COMPARE = ("score", "world.trooper_landed", "world.trooper_body_killed", "world.trooper_chute_killed",
-           "world.aircraft_down", "world.bombs_landed", "world.shots", "world.unexplained_fates", "active_s",
-           "bullet_audit.credit_rate", "bullet_audit.uncredited", "bullet_audit.ended_early", "bullet_audit.false_hit",
-           "bullet_audit.edge_called_hit")
+def _pooled(rows, num, den):
+    """Sum over games of num / sum of den, ± s.e. clustered by game (bullets
+    within a game aren't independent, so a binomial s.e. is far too small)."""
+    pairs = [(_get(r, num) or 0, _get(r, den) or 0) for r in rows]
+    d = sum(y for _, y in pairs)
+    if not d:
+        return "-"
+    p = sum(x for x, _ in pairs) / d
+    k = len(pairs)
+    se = (sum((x - p * y) ** 2 for x, y in pairs) * k / max(k - 1, 1)) ** 0.5 / d
+    return f"{p:.3f} ± {se:.3f}"
+
+
+# (label, how, key[, denominator])
+COMPARE = (
+    ("score", "mean", "score"),
+    ("active minutes", "mean", "active_min"),
+    ("per minute of play:", None, None),
+    ("  troopers landed", "per_min", "world.trooper_landed"),
+    ("  troopers body-killed", "per_min", "world.trooper_body_killed"),
+    ("  troopers chute-killed", "per_min", "world.trooper_chute_killed"),
+    ("  aircraft down", "per_min", "world.aircraft_down"),
+    ("  bombs landed", "per_min", "world.bombs_landed"),
+    ("  shots", "per_min", "world.shots"),
+    ("  unexplained fates", "per_min", "world.unexplained_fates"),
+    ("bullet audit (pooled):", None, None),
+    ("  hits credited / collisions", "pooled", "bullet_audit.credited", "bullet_audit.collisions"),
+    ("  false hits / collisions", "pooled", "bullet_audit.false_hit", "bullet_audit.collisions"),
+    ("  lost / bullets", "pooled", "bullet_audit.ended_early", "bullet_audit.bullets"),
+    ("  edge exits called hits", "pooled", "bullet_audit.edge_called_hit", "bullet_audit.edge_exits"),
+    ("loop p99 ms", "mean", "loop_ms.p99"),
+)
 
 
 def compare(run):
     rows = store.summaries(run)
+    for r in rows:
+        r["active_min"] = r["active_s"] / 60 if r.get("active_s") else None
     arms = sorted({r["arm"] for r in rows})
-    lines = [f"{'(mean ± s.e.)':28s}" + "".join(f"{a:>22s}" for a in arms),
-             f"{'games':28s}" + "".join(f"{sum(r['arm'] == a for r in rows):>22d}" for a in arms)]
-    for key in COMPARE:
-        lines.append(f"{key:28s}" + "".join(f"{_stat([r for r in rows if r['arm'] == a], key):>22s}" for a in arms))
+    by = {a: [r for r in rows if r["arm"] == a] for a in arms}
+    w = 30
+    lines = [f"{'(mean ± s.e.)':{w}s}" + "".join(f"{a:>22s}" for a in arms),
+             f"{'games':{w}s}" + "".join(f"{len(by[a]):>22d}" for a in arms)]
+    for label, how, key, *den in COMPARE:
+        if how is None:
+            lines.append(label)
+            continue
+        cells = []
+        for a in arms:
+            rs = by[a]
+            cells.append(_mean_se([_get(r, key) for r in rs]) if how == "mean" else
+                         _per_min(rs, key) if how == "per_min" else _pooled(rs, key, den[0]))
+        lines.append(f"{label:{w}s}" + "".join(f"{c:>22s}" for c in cells))
     return "\n".join(lines), rows
 
 

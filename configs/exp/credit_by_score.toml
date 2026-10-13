@@ -1,9 +1,0 @@
-# Item 3 of the vanishing-bullet work: credit a bullet that ended mid-screen
-# with no hit in view from the score gain that followed (world.py
-# _resolve_deferred). Replays (3 games): uncredited collisions 37 -> 15
-# (memory observer, no false credits), 32 -> 11 (vision, 3 of 21 wrong).
-extends = "../base.toml"
-name = "credit_by_score"
-
-[world]
-credit_by_score = true

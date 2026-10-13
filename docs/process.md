@@ -119,6 +119,7 @@ schedule a short horizon), not argmax per frame.
 | tool | use |
 |---|---|
 | `events.jsonl`, `summary.json`, `[record] frames / memory` | every game |
+| `bullet_audit` in every `summary.json` (`record/audit.py`): each tracked bullet checked against its memory slot -- hits credited / collisions, false hits, lost bullets | every game with `[record] memory` |
 | `python -m paratrooper ab A.toml B.toml`: arms alternate game by game, both configs archived | `manifest.json` has the git sha; `game_start` also logs `code` (a hash of the package source) |
 | `lab/diagnostics/mem_diag.py` | per trooper: hit / why the shot missed / never engaged, from memory |
 | `lab/diagnostics/review_crush.py`, `lab/diagnostics/audit_misses.py` | frame-level shot reviews |

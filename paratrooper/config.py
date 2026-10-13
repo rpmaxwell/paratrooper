@@ -66,8 +66,9 @@ class Policy:
 class World:
     # a bullet that ended mid-screen with no hit in view is credited from the
     # score: a gain matching a target's value (trooper 5, aircraft 10, bomb 30)
-    # within a few ticks, given to the nearest such target on its path
-    credit_by_score: bool = False
+    # within a few ticks, given to the nearest such target on its path.
+    # Promoted 2026-10-13 (configs/archive/2026-10-13_ab_base_vs_credit_by_score__*)
+    credit_by_score: bool = True
 
 
 @dataclass

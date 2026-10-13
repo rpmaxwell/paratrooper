@@ -306,6 +306,19 @@ replaying three recorded games through the old and new code with both
 observers and the policy running: the event streams were byte-identical
 (14,212 events).
 
+Same day, on that branch: **the vanishing bullets.** No one had ever seen
+a bullet vanish on screen, and memory confirmed it: the game moves every
+bullet every tick until it frees the slot. The "vanished" ends were the
+tracker's: exits at x = 0 counted as on screen, and bullets in a one-lane
+burst swapping dots. With the game's slot as identity (memory observer) and
+lane-chain matching (vision), bullets ended while still flying went
+167 -> 0 / 178 -> 76. A bullet audit against memory now runs after every
+game. Crediting hits from the score, the first A/B on the new tooling
+(6 games per arm), raised hits credited from 93.6% to 98.4% of the game's
+collisions with no rise in false credits, and was promoted. Play was
+identical in both arms, yet scores were 1,312 vs 767: game-to-game luck,
+and the reason the tables now show per-minute rates and the audit.
+
 ---
 
 ## Lessons that kept coming back

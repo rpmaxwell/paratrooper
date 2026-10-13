@@ -64,10 +64,17 @@ layout (`game_<t0>.jsonl/.npz/_mem.npz`); `replay` and the lab diagnostics read 
 2. **Every finished experiment is archived.** `ab` writes both arms' resolved
    configs to `configs/archive/<run>__<arm>.toml` with `[meta]` (git sha, run,
    mean score, `result`, `status = "pending"`). Fill in `result` and
-   `status` (`promoted` / `rejected`) and commit. A promoted arm's changes go
-   into `base.toml` or the defaults. A rejected arm's *code* is deleted; its
+   `status` (`promoted` / `rejected`, and `control` for the arm it was
+   compared against) and commit. A promoted arm's changes go into
+   `base.toml` or the defaults. A rejected arm's *code* is deleted; its
    archived config stays. Loading an archived config whose kind is gone names
    the commit to check out.
+8. **Judge A/Bs on what the change can move.** Score varies ~550 game to
+   game: 6 games per arm can't detect anything smaller than a doubling (an
+   A/B with identical play showed 767 vs 1,312). Prefer per-minute rates and
+   the bullet audit (`ab` prints both, s.e. clustered by game), and when a
+   change is meant to leave play alone, check that with `replay` (decisions
+   and presses identical).
 3. **Every run records what produced it**: resolved config per arm, git sha,
    uncommitted diff (`git.diff`). Commit before A/Bs you want to keep.
 4. **Ticks inside, seconds only at the edges.** New code counts game ticks;
