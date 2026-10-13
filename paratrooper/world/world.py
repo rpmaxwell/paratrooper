@@ -11,6 +11,7 @@ next position overlapped the entity (canopy box, body box, aircraft,
 bomb) within a few ticks of the entity disappearing / losing its canopy;
 otherwise the fate is logged with evidence "unexplained".
 """
+from collections import defaultdict
 from dataclasses import dataclass, field
 from itertools import count
 
@@ -94,6 +95,7 @@ class Bullet:
     path: list = field(default_factory=list)   # (tick, x, y)
     v_measured: tuple = None
     end: dict = None
+    slot: int = None                           # the game's bullet slot (memory observer)
 
 
 class World:
@@ -291,30 +293,17 @@ class World:
     # ---------------------------------------------------------------- bullets
     def _bullets(self, s, t, tk):
         dots = set(s.dots)
-        claimed = set()
-        # A bullet moves exactly one lane step per game tick, so on a frame k
-        # ticks after its last sighting it must be k steps on -- never "stayed
-        # put" once a tick has passed (that let a bullet grab the dot of a
-        # second bullet spawned right behind it on the same lane, swapping
-        # their identities). +-1 step absorbs clock jitter at tick boundaries.
+        slot_of = dict(zip(s.dots, s.dot_slots)) if s.dot_slots is not None else None
+        seen, claimed = self._match_tracked(dots, slot_of, tk)
         for b in sorted(self.bullets, key=lambda b: b.first_tick or 0):
-            (vx, vy) = M.LANES[b.lane][1]
-            m_exp = max(0, tk - self.tick(b.t))
-            order = [m_exp] + [m for m in (m_exp + 1, m_exp - 1) if m >= (1 if m_exp >= 1 else 0)]
-            seen_at = None
-            for m in order:
-                p = (b.pos[0] + vx * m, b.pos[1] + vy * m)
-                if p in dots and p not in claimed:
-                    seen_at = (m, p)
-                    break
-            if seen_at:
-                m, p = seen_at
-                claimed.add(p)
+            if id(b) in seen:
+                m, p = seen[id(b)]
                 if m:
                     b.pos, b.t = p, t
                     b.path.append((tk, p[0], p[1]))
                 continue
-            if (t - b.t) / M.TICK_S > BULLET_GONE_TICKS:
+            if b.slot is not None or (t - b.t) / M.TICK_S > BULLET_GONE_TICKS:
+                # memory: its slot is free or holds another bullet -- the game ended it
                 self._end_bullet(b, tk)
         # orphan candidates (dots at a lane's spawn with no press to explain
         # them): keep the lanes whose next position shows up, promote once
@@ -330,7 +319,8 @@ class World:
                 lane, nxt = keep[0]
                 claimed.add(nxt)
                 b = Bullet(next(_ids), o["t"], lane, {"kind": "unattributed"}, pos=nxt, t=t,
-                           first_tick=o["tick"], path=[(o["tick"],) + o["pos"], (tk,) + nxt])
+                           first_tick=o["tick"], path=[(o["tick"],) + o["pos"], (tk,) + nxt],
+                           slot=slot_of.get(nxt) if slot_of else None)
                 self.bullets.append(b)
                 self.orphans.remove(o)
                 self.stats["bullets_unattributed"] += 1
@@ -360,12 +350,52 @@ class World:
                 if p in dots and p not in claimed:
                     claimed.add(p)
                     e.pos, e.t, e.first_tick = p, t, tk
+                    e.slot = slot_of.get(p) if slot_of else None
                     e.path.append((tk, p[0], p[1]))
                     self.expected.remove(e)
                     self.bullets.append(e)
                     self.stats["bullets_found"] += 1
                     break
         self._find_orphans(dots, claimed, t, tk)
+
+    def _match_tracked(self, dots, slot_of, tk):
+        """Each tracked bullet's dot this frame -> ({id(bullet): (steps, dot)}, claimed dots).
+
+        Memory observer: a bullet is its slot -- found wherever the slot's dot
+        is, as long as that is on the bullet's lane ahead of it.
+        Otherwise: a bullet moves exactly one lane step per game tick, so on a
+        frame k ticks after its last sighting it is k steps on (+-1 for clock
+        jitter at tick boundaries; never "stayed put" once a tick has passed --
+        that let a bullet grab the dot of a second one spawned right behind
+        it). Bullets on one lane are matched together (_assign): bursts fire
+        one tick apart, so a lane holds a chain of dots one step apart, and
+        matching bullet by bullet let one take its neighbour's dot."""
+        seen, claimed = {}, set()
+        if slot_of is not None:
+            dot_of = {sl: p for p, sl in slot_of.items()}
+            for b in self.bullets:
+                p = dot_of.get(b.slot) if b.slot is not None else None
+                m = _steps_on_lane(b, p) if p is not None else None
+                if m is not None and m <= max(0, tk - self.tick(b.t)) + 3:
+                    seen[id(b)] = (m, p)
+                    claimed.add(p)
+        lanes = defaultdict(list)
+        for b in sorted(self.bullets, key=lambda b: b.first_tick or 0):
+            if id(b) not in seen and b.slot is None:
+                lanes[b.lane].append(b)
+        for bs in lanes.values():
+            (vx, vy) = M.LANES[bs[0].lane][1]
+            opts = []
+            for b in bs:
+                m_exp = max(0, tk - self.tick(b.t))
+                order = [m_exp] + [m for m in (m_exp + 1, m_exp - 1) if m >= (1 if m_exp >= 1 else 0)]
+                cand = [(b.pos[0] + vx * m, b.pos[1] + vy * m) for m in order]
+                opts.append([(abs(m - m_exp), m, p) for m, p in zip(order, cand) if p in dots and p not in claimed])
+            for b, pick in zip(bs, _assign(opts)):
+                if pick is not None:
+                    seen[id(b)] = pick
+                    claimed.add(pick[1])
+        return seen, claimed
 
     def _find_orphans(self, dots, claimed, t, tk):
         for p in dots - claimed:
@@ -395,7 +425,7 @@ class World:
                          candidates=[(e, r) for e, r, _, _ in hits])
             for e, r, pt, htk in hits:
                 self.recent_ends.append((htk, b.id, e, r, pt))
-        elif not (0 <= cp[0] <= 639 and 0 <= cp[1] <= 399):
+        elif not (0 < cp[0] < 640 and 0 <= cp[1] <= 399):   # the game frees it at x <= 0 / >= 640, y < 0
             b.end = dict(kind="left_screen", tick=tk, point=cp)
             self.stats["left_screen"] += 1
         else:
@@ -604,6 +634,43 @@ class World:
                            engagements=tr.engagements, last_y=tr.y))
         for b in list(self.bullets):
             self._end_bullet(b, tk)
+
+
+def _steps_on_lane(b, p):
+    """Lane steps from b's last position to p, or None if p is not on b's lane ahead."""
+    (vx, vy) = M.LANES[b.lane][1]
+    dx, dy = p[0] - b.pos[0], p[1] - b.pos[1]
+    m = round(dy / vy) if vy else round(dx / vx)
+    return m if m >= 0 and (dx, dy) == (vx * m, vy * m) else None
+
+
+def _assign(opts):
+    """opts: per bullet, its candidate (cost, steps, dot) in preference order.
+    -> per bullet (steps, dot) or None: the most bullets matched, each dot at
+    most once, then the least total cost; ties keep earlier bullets'
+    preferences (= bullet-by-bullet matching whenever nothing conflicts)."""
+    best = [(-1, 0), None]
+
+    def go(i, used, cost, picks, n):
+        if n + (len(opts) - i) < best[0][0]:
+            return
+        if i == len(opts):
+            if (n, -cost) > (best[0][0], -best[0][1]):
+                best[0], best[1] = (n, cost), list(picks)
+            return
+        for c, m, p in opts[i]:
+            if p not in used:
+                picks.append((m, p))
+                go(i + 1, used | {p}, cost + c, picks, n + 1)
+                picks.pop()
+        picks.append(None)
+        go(i + 1, used, cost, picks, n)
+        picks.pop()
+
+    if all(len(o) <= 1 for o in opts) and len({o[0][2] for o in opts if o}) == sum(1 for o in opts if o):
+        return [(o[0][1], o[0][2]) if o else None for o in opts]   # no choice to make (the usual case)
+    go(0, frozenset(), 0, [], 0)
+    return best[1]
 
 
 def _in(box, p, pad=0):

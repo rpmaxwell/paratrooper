@@ -106,11 +106,16 @@ class MemState:
 
     def bullets(self):
         """-> [(x, y, direction)] game coords of live bullets."""
+        return [(x, y, d) for _, x, y, d in self.bullet_slots()]
+
+    def bullet_slots(self):
+        """-> [(slot, x, y, direction)]: a bullet keeps its slot from spawn
+        until the game frees it (x = 0), so the slot is its identity."""
         out = []
         for i in range(N_BULLETS):
             x = self.u16(0x1F59 + 2 * i)
             if x:
-                out.append((2 * x, 2 * self.u16(0x1F59 + 2 * i + 0x3C) + 1, self.u16(0x1F59 + 2 * i + 0x78)))
+                out.append((i, 2 * x, 2 * self.u16(0x1F59 + 2 * i + 0x3C) + 1, self.u16(0x1F59 + 2 * i + 0x78)))
         return out
 
 
@@ -130,5 +135,7 @@ def sprites_from_memory(ms, seen):
         if canopy:
             s.canopies.append((x, y))
     s.bombs = ms.bombs()
-    s.dots = [(x, y) for x, y, _ in ms.bullets()]
+    bs = ms.bullet_slots()
+    s.dots = [(x, y) for _, x, y, _ in bs]
+    s.dot_slots = [i for i, _, _, _ in bs]
     return s

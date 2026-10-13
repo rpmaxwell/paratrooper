@@ -53,6 +53,7 @@ class Sprites:
     canopies: list = field(default_factory=list)     # implied body (x, y) under a canopy
     landed: list = field(default_factory=list)       # (x, head_y) of landed troopers' heads
     dots: list = field(default_factory=list)         # 1-native-px white dots (bullets), game coords
+    dot_slots: list = None                           # the game's bullet slot per dot (memory observer only)
 
 
 def _components(mask):

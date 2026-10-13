@@ -7,11 +7,11 @@
     "shots": 105,
     "bullets_found": 98,
     "bullets_not_found": 7,
-    "bullets_unattributed": 13,
-    "hits": 30,
-    "left_screen": 56,
-    "unexplained_ends": 12,
-    "trooper_body_killed": 6,
+    "bullets_unattributed": 14,
+    "hits": 29,
+    "left_screen": 59,
+    "unexplained_ends": 11,
+    "trooper_body_killed": 5,
     "trooper_chute_killed": 1,
     "trooper_landed": 2,
     "trooper_fell_dead": 1,
@@ -19,20 +19,20 @@
     "aircraft_down": 20,
     "bombs_shot": 3,
     "bombs_landed": 0,
-    "unexplained_fates": 2
+    "unexplained_fates": 3
    },
-   "n_events": 464,
+   "n_events": 465,
    "decisions": 49
   },
   "memory": {
    "stats": {
-    "shots": 100,
-    "bullets_found": 88,
+    "shots": 99,
+    "bullets_found": 87,
     "bullets_not_found": 12,
-    "bullets_unattributed": 17,
+    "bullets_unattributed": 18,
     "hits": 30,
     "left_screen": 61,
-    "unexplained_ends": 6,
+    "unexplained_ends": 3,
     "trooper_body_killed": 5,
     "trooper_chute_killed": 1,
     "trooper_landed": 2,
@@ -43,7 +43,7 @@
     "bombs_landed": 0,
     "unexplained_fates": 2
    },
-   "n_events": 461,
+   "n_events": 460,
    "decisions": 45
   }
  }
